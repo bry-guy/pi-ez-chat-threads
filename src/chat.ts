@@ -128,6 +128,22 @@ export function resolveConversation(config: ChatConfig, conversationId: string):
 	};
 }
 
+export function listDiscordParentConversations(config: ChatConfig): ResolvedConversation[] {
+	const out: ResolvedConversation[] = [];
+	for (const [accountId, account] of Object.entries(config.accounts ?? {})) {
+		if (account.service !== "discord") continue;
+		for (const channelKey of Object.keys(account.channels ?? {})) {
+			const resolved = resolveConversation(config, `${accountId}/${channelKey}`);
+			if (!resolved) continue;
+			// Managed thread entries are valid pi-chat conversations, but they should not
+			// be offered as parents for another persistent thread by default.
+			if (resolved.channel.managedBy === "pi-ez-chat-threads") continue;
+			out.push(resolved);
+		}
+	}
+	return out.sort((a, b) => a.conversationId.localeCompare(b.conversationId));
+}
+
 export function addThreadConversation(params: {
 	config: ChatConfig;
 	parent: ResolvedConversation;

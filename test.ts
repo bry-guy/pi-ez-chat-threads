@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import extension from "./index.js";
-import { addThreadConversation, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
+import { addThreadConversation, listDiscordParentConversations, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread } from "./src/discord.js";
 import {
 	buildWorkerCommand,
@@ -60,6 +60,9 @@ async function main() {
 		const again = addThreadConversation({ config, parent, threadId: "1234567890", threadName: "feature idea renamed", sessionId: "sess1" });
 		check("same Discord thread id reuses config entry", again.conversationId === thread.conversationId);
 		check("reuse updates name", again.channel.name === "feature idea renamed");
+		const parents = listDiscordParentConversations(config);
+		check("parent picker includes normal Discord channel", parents.some((c) => c.conversationId === parent.conversationId));
+		check("parent picker excludes managed threads", !parents.some((c) => c.conversationId === thread.conversationId));
 
 		const copied = await seedThreadWorkspace(parent, thread);
 		check("workspace seeded", copied >= 2, String(copied));

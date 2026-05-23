@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
-import { addThreadConversation, loadChatConfig, resolveConversation, saveChatConfig } from "./src/chat.js";
+import { addThreadConversation, listDiscordParentConversations, loadChatConfig, resolveConversation, saveChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread, sendDiscordThreadIntro } from "./src/discord.js";
 import {
 	defaultThreadName,
@@ -14,6 +14,7 @@ import {
 
 interface Args {
 	name?: string;
+	parentConversationId?: string;
 	newThread: boolean;
 	noSpawn: boolean;
 	restart: boolean;
@@ -30,6 +31,8 @@ function parseArgs(raw: string): Args {
 		if (token === "--new") args.newThread = true;
 		else if (token === "--no-spawn") args.noSpawn = true;
 		else if (token === "--restart") args.restart = true;
+		else if (token.startsWith("--parent=")) args.parentConversationId = token.slice("--parent=".length);
+		else if (token.startsWith("--channel=")) args.parentConversationId = token.slice("--channel=".length);
 		else if (token.startsWith("-")) throw new Error(`unknown flag: ${token}`);
 		else name.push(token);
 	}
@@ -37,21 +40,45 @@ function parseArgs(raw: string): Args {
 	return args;
 }
 
-const USAGE = `Usage: /chat-thread [thread name] [--new] [--restart] [--no-spawn]
+const USAGE = `Usage: /chat-thread [thread name] [--parent=<account/channel>] [--new] [--restart] [--no-spawn]
 
-Create a persistent Discord thread for the current pi-chat conversation and fork this pi session into it.
+Create a persistent Discord thread and fork the current pi session into it.
+If this session is connected to pi-chat, that Discord channel is the default parent.
+Otherwise pass --parent or choose a configured Discord channel interactively.
 Repeated calls reuse this session's existing thread unless --new is passed.`;
+
+async function chooseParentConversation(
+	config: Awaited<ReturnType<typeof loadChatConfig>>,
+	ctx: ExtensionCommandContext,
+	explicitId?: string,
+	connectedId?: string,
+): Promise<ResolvedConversation> {
+	const selectedId = explicitId ?? connectedId;
+	if (selectedId) {
+		const parent = resolveConversation(config, selectedId);
+		if (!parent) throw new Error(`Configured pi-chat conversation not found: ${selectedId}`);
+		if (parent.service !== "discord") throw new Error("/chat-thread currently supports Discord parent channels only.");
+		return parent;
+	}
+
+	const choices = listDiscordParentConversations(config);
+	if (choices.length === 0) throw new Error("No configured Discord pi-chat channels. Run /chat-config first.");
+	if (!ctx.hasUI) throw new Error("No connected pi-chat context. Pass --parent=<account/channel>.");
+	const labels = choices.map((c) => `${c.conversationName}  (${c.conversationId})`);
+	const picked = await ctx.ui.select("Create Discord thread under which channel?", labels);
+	const idx = labels.indexOf(picked ?? "");
+	if (idx < 0) throw new Error("No parent channel selected.");
+	return choices[idx];
+}
 
 async function createOrReuseThread(raw: string, ctx: ExtensionCommandContext): Promise<string> {
 	const args = parseArgs(raw);
 	const entries = ctx.sessionManager.getEntries();
-	const parentConversationId = getCurrentPiChatConversationId(entries);
-	if (!parentConversationId) throw new Error("This pi session is not connected to pi-chat. Run /chat-connect first.");
+	const connectedConversationId = getCurrentPiChatConversationId(entries);
 
 	const config = await loadChatConfig();
-	const parent = resolveConversation(config, parentConversationId);
-	if (!parent) throw new Error(`Current pi-chat conversation is no longer configured: ${parentConversationId}`);
-	if (parent.service !== "discord") throw new Error("/chat-thread currently supports Discord pi-chat conversations only.");
+	const parent = await chooseParentConversation(config, ctx, args.parentConversationId, connectedConversationId);
+	const parentConversationId = parent.conversationId;
 
 	const existing = args.newThread ? undefined : getExistingThreadState(entries, parentConversationId);
 	if (existing) {
@@ -111,7 +138,7 @@ async function createOrReuseThread(raw: string, ctx: ExtensionCommandContext): P
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("chat-thread", {
-		description: "Create/reuse a persistent Discord thread-backed pi-chat session from the current chat context",
+		description: "Create/reuse a persistent Discord thread-backed pi-chat session from the current pi session",
 		handler: async (raw, ctx) => {
 			try {
 				ctx.ui.notify(await createOrReuseThread(raw, ctx), "info");

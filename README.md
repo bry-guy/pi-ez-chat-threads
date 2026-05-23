@@ -44,7 +44,7 @@ From a pi session that is already connected to a Discord pi-chat channel:
 /chat-thread Fix login tests
 ```
 
-That does the whole handoff:
+That does the whole handoff using the connected Discord channel as the parent:
 
 1. Creates a Discord thread named `Fix login tests`.
 2. Adds it to pi-chat config as a new conversation.
@@ -53,6 +53,23 @@ That does the whole handoff:
 5. Starts a tmux worker connected to the thread.
 
 Now talk in that Discord thread. It is its own continuous pi session.
+
+## Create a thread from any pi session
+
+You do **not** have to switch the main channel with `/chat-connect` just to create a thread. The current pi session is always the session that gets forked. The connected pi-chat context is only used to choose the Discord parent channel.
+
+If your current pi session is not connected to pi-chat, pass the parent channel explicitly:
+
+```text
+/chat-thread Fix login tests --parent=my_bot/dev
+```
+
+If you omit `--parent` in interactive pi, the command lets you choose from configured Discord channels.
+
+This means the workflow can be either:
+
+- hop main chat with `/chat-connect`, then `/chat-thread`; or
+- stay in any local/resumed pi session and run `/chat-thread --parent=<account/channel>`.
 
 ## Default thread name
 
@@ -79,6 +96,20 @@ If you really want another thread from the same source session:
 ```text
 /chat-thread Another branch --new
 ```
+
+## Command reference
+
+```text
+/chat-thread [thread name] [--parent=<account/channel>] [--new] [--restart] [--no-spawn]
+```
+
+Flags:
+
+- `--parent=<account/channel>`, `--channel=<account/channel>` — Discord pi-chat channel under which to create the thread. Optional when already connected to pi-chat.
+- `--new` — create another thread instead of reusing this session's existing persistent thread.
+- `--restart` — restart the thread worker if it is already running.
+- `--no-spawn` — configure and fork the session but do not start tmux.
+
 
 ## Worker options
 
