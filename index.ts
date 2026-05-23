@@ -1,12 +1,14 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { addThreadConversation, listDiscordParentConversations, loadChatConfig, resolveConversation, saveChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread, sendDiscordThreadIntro } from "./src/discord.js";
 import {
 	defaultThreadName,
 	forkSessionForThread,
+	findMostRecentWorkerSession,
 	getCurrentPiChatConversationId,
 	getExistingThreadState,
+	listSavedSessionsForPicker,
 	seedThreadWorkspace,
 	spawnThreadWorker,
 	type ThreadState,
@@ -49,7 +51,7 @@ Repeated calls reuse this session's existing thread unless --new is passed.`;
 
 async function chooseParentConversation(
 	config: Awaited<ReturnType<typeof loadChatConfig>>,
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	explicitId?: string,
 	connectedId?: string,
 ): Promise<ResolvedConversation> {
@@ -71,7 +73,38 @@ async function chooseParentConversation(
 	return choices[idx];
 }
 
-async function createOrReuseThread(raw: string, ctx: ExtensionCommandContext): Promise<string> {
+async function chooseSourceSession(
+	ctx: ExtensionContext,
+	parent: ResolvedConversation,
+): Promise<{ path: string; description: string }> {
+	const current = ctx.sessionManager.getSessionFile();
+	const parentWorker = await findMostRecentWorkerSession(parent.conversationId);
+
+	if (!ctx.hasUI) {
+		if (!current) throw new Error("Current pi session is not persisted. Start pi with sessions enabled before /chat-thread.");
+		return { path: current, description: "current pi session" };
+	}
+
+	const options: string[] = [];
+	if (current) options.push(`Use current pi session (default) — ${ctx.sessionManager.getSessionName() ?? ctx.sessionManager.getSessionId().slice(0, 8)}`);
+	options.push("Resume/use a different saved pi session...");
+	if (parentWorker) options.push(`Use current connected worker session for ${parent.conversationId}`);
+
+	const picked = await ctx.ui.select("Which pi session should this Discord thread continue?", options);
+	if (!picked) throw new Error("No source session selected.");
+	if (picked.startsWith("Use current pi session")) return { path: current!, description: "current pi session" };
+	if (picked.startsWith("Use current connected worker")) return { path: parentWorker!, description: `parent worker session for ${parent.conversationId}` };
+
+	const sessions = await listSavedSessionsForPicker();
+	if (sessions.length === 0) throw new Error("No saved pi sessions found to resume.");
+	const labels = sessions.map((s) => s.label);
+	const selected = await ctx.ui.select("Choose saved pi session to fork into the Discord thread", labels);
+	const idx = labels.indexOf(selected ?? "");
+	if (idx < 0) throw new Error("No saved pi session selected.");
+	return { path: sessions[idx].path, description: sessions[idx].label };
+}
+
+async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<string> {
 	const args = parseArgs(raw);
 	const entries = ctx.sessionManager.getEntries();
 	const connectedConversationId = getCurrentPiChatConversationId(entries);
@@ -90,8 +123,7 @@ async function createOrReuseThread(raw: string, ctx: ExtensionCommandContext): P
 		].join("\n");
 	}
 
-	const sessionFile = ctx.sessionManager.getSessionFile();
-	if (!sessionFile) throw new Error("Current pi session is not persisted. Start pi with sessions enabled before /chat-thread.");
+	const sourceSession = await chooseSourceSession(ctx, parent);
 
 	const threadName = (args.name ?? defaultThreadName(ctx.sessionManager)).slice(0, 90);
 	const created = await createDiscordThread({ account: parent.account, parentChannelId: parent.channel.id, name: threadName });
@@ -113,7 +145,7 @@ async function createOrReuseThread(raw: string, ctx: ExtensionCommandContext): P
 	};
 	(ctx.sessionManager as unknown as { appendCustomEntry(type: string, data: unknown): void }).appendCustomEntry("pi-ez-chat-thread", state);
 	const fileCount = await seedThreadWorkspace(parent, thread);
-	const forked = await forkSessionForThread({ sourceSessionFile: sessionFile, thread, threadState: state });
+	const forked = await forkSessionForThread({ sourceSessionFile: sourceSession.path, thread, threadState: state });
 	let worker = "not spawned (--no-spawn)";
 	if (!args.noSpawn) worker = spawnThreadWorker({ conversationId: thread.conversationId, sessionFile: forked, cwd: ctx.cwd, restart: args.restart });
 
@@ -129,6 +161,7 @@ async function createOrReuseThread(raw: string, ctx: ExtensionCommandContext): P
 		`  conversation: ${thread.conversationId}`,
 		`  thread id: ${created.id}`,
 		`  workspace files: ${fileCount}`,
+		`  source session: ${sourceSession.description}`,
 		`  forked session: ${forked}`,
 		`  worker: ${worker}`,
 		``,
@@ -146,5 +179,23 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`${(err as Error).message}\n\n${USAGE}`, "error");
 			}
 		},
+	});
+
+	pi.on("input", async (event, ctx) => {
+		const text = event.text.trim();
+		if (!text.startsWith("/chat-thread")) return { action: "continue" };
+		const raw = text.slice("/chat-thread".length).trim();
+		try {
+			const result = await createOrReuseThread(raw, ctx);
+			return {
+				action: "transform",
+				text: `The remote /chat-thread command completed. Reply to the user with this result exactly:\n\n${result}`,
+			};
+		} catch (err) {
+			return {
+				action: "transform",
+				text: `The remote /chat-thread command failed. Reply to the user with this error and usage:\n\n${(err as Error).message}\n\n${USAGE}`,
+			};
+		}
 	});
 }

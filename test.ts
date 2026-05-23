@@ -8,6 +8,7 @@ import { createDiscordThread } from "./src/discord.js";
 import {
 	buildWorkerCommand,
 	defaultThreadName,
+	findMostRecentWorkerSession,
 	forkSessionForThread,
 	getCurrentPiChatConversationId,
 	getExistingThreadState,
@@ -43,8 +44,13 @@ async function main() {
 	const work = await mkdtemp(join(tmpdir(), "pi-ez-chat-threads-test-"));
 	try {
 		let registered = "";
-		extension({ registerCommand: (name: string) => { registered = name; } } as any);
+		let inputHook = false;
+		extension({
+			registerCommand: (name: string) => { registered = name; },
+			on: (event: string) => { if (event === "input") inputHook = true; },
+		} as any);
 		check("pi extension registers /chat-thread", registered === "chat-thread");
+		check("pi extension registers remote input hook", inputHook);
 
 		const parent = fakeConversation(work, "main", "parent-channel-id");
 		await mkdir(parent.workspaceDir, { recursive: true });
@@ -106,6 +112,8 @@ async function main() {
 		check("forked session contains pi-chat binding", forkedText.includes('"customType":"pi-chat-state"'));
 		check("forked session contains thread binding", forkedText.includes('"customType":"pi-ez-chat-thread"'));
 		check("forked session stored under tmux-sessions", forked.includes("tmux-sessions/pi-chat-worker-acct_feature-idea-"), forked);
+		const recentWorker = await findMostRecentWorkerSession(thread.conversationId);
+		check("parent worker session finder returns most recent", recentWorker === forked, recentWorker);
 
 		const cmd = buildWorkerCommand("/tmp/sess.jsonl", "/tmp/sdir", "acct/thread", ["node", "pi", "-e", "/pkg"]);
 		check("worker command passes chat conversation", cmd.includes("--chat-conversation 'acct/thread'"), cmd);

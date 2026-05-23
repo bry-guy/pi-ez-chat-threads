@@ -5,9 +5,38 @@ import { promisify } from "node:util";
 
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 
-import { PI_CHAT_STATE_TYPE, THREAD_STATE_TYPE, tmuxSafeName, type ResolvedConversation } from "./chat.js";
+import { CHAT_HOME, PI_CHAT_STATE_TYPE, THREAD_STATE_TYPE, tmuxSafeName, type ResolvedConversation } from "./chat.js";
 
 const execFileP = promisify(execFile);
+
+export interface SourceSessionChoice {
+	label: string;
+	path: string;
+}
+
+export async function findMostRecentWorkerSession(conversationId: string): Promise<string | undefined> {
+	const dir = join(CHAT_HOME, "tmux-sessions", tmuxSafeName(conversationId));
+	const entries = await readdir(dir).catch(() => []);
+	const files = await Promise.all(
+		entries
+			.filter((name) => name.endsWith(".jsonl"))
+			.map(async (name) => {
+				const path = join(dir, name);
+				const info = await stat(path).catch(() => undefined);
+				return info?.isFile() ? { path, mtime: info.mtimeMs } : undefined;
+			}),
+	);
+	return files.filter((f): f is { path: string; mtime: number } => !!f).sort((a, b) => b.mtime - a.mtime)[0]?.path;
+}
+
+export async function listSavedSessionsForPicker(limit = 30): Promise<SourceSessionChoice[]> {
+	const sessions = await SessionManager.listAll().catch(() => []);
+	return sessions.slice(0, limit).map((s) => {
+		const title = s.name?.trim() || s.firstMessage.replace(/\s+/g, " ").slice(0, 60) || s.id.slice(0, 8);
+		const cwd = s.cwd ? ` — ${s.cwd}` : "";
+		return { label: `${title}${cwd}`, path: s.path };
+	});
+}
 
 export interface ThreadState {
 	parentConversationId: string;

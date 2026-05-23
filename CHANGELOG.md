@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-05-22
+
+### Added
+- Interactive source-session picker for `/chat-thread`: current session, a different saved session, or the parent channel worker session.
+- Remote `/chat-thread` support via pi's input hook when the package is loaded in a pi-chat worker.
+
+### Changed
+- Treat the Discord parent channel and the source pi session as separate choices. The current pi session remains the default source.
+
 ## [0.1.1] - 2026-05-22
 
 ### Added

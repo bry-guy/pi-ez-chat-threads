@@ -54,9 +54,19 @@ That does the whole handoff using the connected Discord channel as the parent:
 
 Now talk in that Discord thread. It is its own continuous pi session.
 
+## Choose which pi session the thread continues
+
+In interactive pi, `/chat-thread` asks which session should become the thread's history:
+
+1. **Use current pi session** — the default, and usually what you want.
+2. **Resume/use a different saved pi session** — pick from recent saved sessions without first switching the main chat connection.
+3. **Use current connected worker session for the parent channel** — use the most recent pi-chat worker session for the selected parent channel, when one exists.
+
+The Discord parent channel and the source pi session are separate choices. The parent channel decides where the Discord thread is created; the source session decides what history the thread continues.
+
 ## Create a thread from any pi session
 
-You do **not** have to switch the main channel with `/chat-connect` just to create a thread. The current pi session is always the session that gets forked. The connected pi-chat context is only used to choose the Discord parent channel.
+You do **not** have to switch the main channel with `/chat-connect` just to create a thread. The current pi session is the default session that gets forked. In interactive pi, you can instead choose a different saved session or the parent channel worker session. The connected pi-chat context is only used to choose the Discord parent channel.
 
 If your current pi session is not connected to pi-chat, pass the parent channel explicitly:
 
@@ -126,6 +136,18 @@ Create/configure/fork the thread but do not spawn tmux:
 ```
 
 You can later start workers through pi-chat, or run the emitted session/conversation manually.
+
+## Use from Discord
+
+When this package is loaded in the pi-chat worker, Discord users can send the same command in chat:
+
+```text
+/chat-thread Fix login tests
+```
+
+pi-chat forwards that text to pi; this package intercepts it before the agent treats it as a normal prompt, creates the thread, and asks the agent to report the result back. This works best from a connected Discord pi-chat channel because the current chat connection supplies the parent channel.
+
+For now, this is implemented as a pi extension input hook rather than a native pi-chat remote command registry. Native third-party remote commands would require a small upstream pi-chat extension point.
 
 ## Main channel versus thread sessions
 
