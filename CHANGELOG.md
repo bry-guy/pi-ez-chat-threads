@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-05-23
+
+### Fixed
+- Remote `/chat-thread` from Discord now defaults to forking the parent channel worker session instead of the command-handling thread session.
+- Thread names now prefer the chosen source session name when available.
+
+### Added
+- `/chat-ez-thread` remote alias for avoiding pi-chat's built-in unbound-thread response path.
+
 ## [0.2.0] - 2026-05-22
 
 ### Added

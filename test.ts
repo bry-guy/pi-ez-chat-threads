@@ -45,12 +45,14 @@ async function main() {
 	try {
 		let registered = "";
 		let inputHook = false;
+		let inputHandler: any;
 		extension({
 			registerCommand: (name: string) => { registered = name; },
-			on: (event: string) => { if (event === "input") inputHook = true; },
+			on: (event: string, handler: any) => { if (event === "input") { inputHook = true; inputHandler = handler; } },
 		} as any);
 		check("pi extension registers /chat-thread", registered === "chat-thread");
 		check("pi extension registers remote input hook", inputHook);
+		check("remote input hook ignores normal text", !!inputHandler);
 
 		const parent = fakeConversation(work, "main", "parent-channel-id");
 		await mkdir(parent.workspaceDir, { recursive: true });

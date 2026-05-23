@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { addThreadConversation, listDiscordParentConversations, loadChatConfig, resolveConversation, saveChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread, sendDiscordThreadIntro } from "./src/discord.js";
@@ -24,6 +24,10 @@ interface Args {
 
 function tokenize(raw: string): string[] {
 	return raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((t) => t.replace(/^["']|["']$/g, "")) ?? [];
+}
+
+function isRemoteContext(ctx: ExtensionContext): boolean {
+	return ctx.sessionManager.getEntries().some((entry) => entry.type === "custom_message" && entry.customType === "chat-context");
 }
 
 function parseArgs(raw: string): Args {
@@ -81,6 +85,9 @@ async function chooseSourceSession(
 	const parentWorker = await findMostRecentWorkerSession(parent.conversationId);
 
 	if (!ctx.hasUI) {
+		if (isRemoteContext(ctx) && parentWorker) {
+			return { path: parentWorker, description: `parent worker session for ${parent.conversationId}` };
+		}
 		if (!current) throw new Error("Current pi session is not persisted. Start pi with sessions enabled before /chat-thread.");
 		return { path: current, description: "current pi session" };
 	}
@@ -125,7 +132,10 @@ async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<
 
 	const sourceSession = await chooseSourceSession(ctx, parent);
 
-	const threadName = (args.name ?? defaultThreadName(ctx.sessionManager)).slice(0, 90);
+	const sourceName = (() => {
+		try { return SessionManager.open(sourceSession.path).getSessionName(); } catch { return undefined; }
+	})();
+	const threadName = (args.name ?? sourceName ?? defaultThreadName(ctx.sessionManager)).slice(0, 90);
 	const created = await createDiscordThread({ account: parent.account, parentChannelId: parent.channel.id, name: threadName });
 	const thread = addThreadConversation({
 		config,
@@ -183,8 +193,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("input", async (event, ctx) => {
 		const text = event.text.trim();
-		if (!text.startsWith("/chat-thread")) return { action: "continue" };
-		const raw = text.slice("/chat-thread".length).trim();
+		if (!text.startsWith("/chat-thread") && !text.startsWith("/chat-ez-thread")) return { action: "continue" };
+		const raw = text.replace(/^\/(chat-thread|chat-ez-thread)\b/, "").trim();
 		try {
 			const result = await createOrReuseThread(raw, ctx);
 			return {
