@@ -2,6 +2,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earen
 
 import { addThreadConversation, listDiscordParentConversations, loadChatConfig, resolveConversation, saveChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread, sendDiscordThreadIntro } from "./src/discord.js";
+import { inheritMounts } from "./src/mounts.js";
 import {
 	defaultThreadName,
 	forkSessionForThread,
@@ -9,7 +10,6 @@ import {
 	getCurrentPiChatConversationId,
 	getExistingThreadState,
 	listSavedSessionsForPicker,
-	seedThreadWorkspace,
 	spawnThreadWorker,
 	type ThreadState,
 } from "./src/session.js";
@@ -52,6 +52,16 @@ Create a persistent Discord thread and fork the current pi session into it.
 If this session is connected to pi-chat, that Discord channel is the default parent.
 Otherwise pass --parent or choose a configured Discord channel interactively.
 Repeated calls reuse this session's existing thread unless --new is passed.`;
+
+function formatInheritedMounts(inherited: string[]): string {
+	return inherited.length > 0 ? inherited.join(", ") : "none (run /chat-mount in the parent channel if you want the host repo available)";
+}
+
+export function assertCanForkFromParent(parent: Pick<ResolvedConversation, "channel">): void {
+	if (parent.channel.managedBy === "pi-ez-chat-threads") {
+		throw new Error("/chat-thread cannot fork from inside an existing managed thread.\nRun /chat-thread from the parent channel instead.");
+	}
+}
 
 async function chooseParentConversation(
 	config: Awaited<ReturnType<typeof loadChatConfig>>,
@@ -118,14 +128,17 @@ async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<
 
 	const config = await loadChatConfig();
 	const parent = await chooseParentConversation(config, ctx, args.parentConversationId, connectedConversationId);
+	assertCanForkFromParent(parent);
 	const parentConversationId = parent.conversationId;
 
 	const existing = args.newThread ? undefined : getExistingThreadState(entries, parentConversationId);
 	if (existing) {
+		const mountInheritance = await inheritMounts(parentConversationId, existing.threadConversationId);
 		return [
 			`Reusing persistent thread: ${existing.threadName}`,
 			`  conversation: ${existing.threadConversationId}`,
 			`  thread id: ${existing.threadId}`,
+			`  inherited mounts: ${formatInheritedMounts(mountInheritance.inherited)}`,
 			`Messages in that Discord thread continue the same pi session history.`,
 		].join("\n");
 	}
@@ -145,6 +158,7 @@ async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<
 		sessionId: ctx.sessionManager.getSessionId(),
 	});
 	await saveChatConfig(config);
+	const mountInheritance = await inheritMounts(parentConversationId, thread.conversationId);
 
 	const state: ThreadState = {
 		parentConversationId,
@@ -154,7 +168,6 @@ async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<
 		createdAt: new Date().toISOString(),
 	};
 	(ctx.sessionManager as unknown as { appendCustomEntry(type: string, data: unknown): void }).appendCustomEntry("pi-ez-chat-thread", state);
-	const fileCount = await seedThreadWorkspace(parent, thread);
 	const forked = await forkSessionForThread({ sourceSessionFile: sourceSession.path, thread, threadState: state });
 	let worker = "not spawned (--no-spawn)";
 	if (!args.noSpawn) worker = spawnThreadWorker({ conversationId: thread.conversationId, sessionFile: forked, cwd: ctx.cwd, restart: args.restart });
@@ -170,7 +183,7 @@ async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<
 		`  parent: ${parent.conversationId}`,
 		`  conversation: ${thread.conversationId}`,
 		`  thread id: ${created.id}`,
-		`  workspace files: ${fileCount}`,
+		`  inherited mounts: ${formatInheritedMounts(mountInheritance.inherited)}`,
 		`  source session: ${sourceSession.description}`,
 		`  forked session: ${forked}`,
 		`  worker: ${worker}`,

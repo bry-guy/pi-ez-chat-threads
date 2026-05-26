@@ -2,14 +2,14 @@
 
 `pi-ez-chat-threads` gives Discord users a simple way to turn a moment in a main `pi-chat` channel into its own long-lived pi session.
 
-Use it when you want one Discord thread to become the durable home for one piece of work: the thread name is the session name, the thread keeps its own pi-chat workspace, and messages in that thread continue the same forked pi session history even after the main channel connects to something else.
+Use it when you want one Discord thread to become the durable home for one piece of work: the thread name is the session name, the thread keeps its own pi-chat-managed scratch workspace, and messages in that thread continue the same forked pi session history even after the main channel connects to something else.
 
 ## What you get
 
 - `/chat-thread` slash command inside pi.
 - Creates a named Discord thread under the currently connected pi-chat channel.
 - Persists that thread in `~/.pi/agent/chat/config.json` as its own pi-chat conversation.
-- Seeds the thread workspace from the current channel workspace.
+- Inherits host-repo mounts configured by `pi-ez-chat-mount` for the parent channel.
 - Forks the current pi session into the thread worker session directory.
 - Starts a dedicated tmux/pi worker for that thread.
 - Reuses the same thread for the same source pi session by default, so a thread is a persistent place, not a disposable response.
@@ -24,6 +24,8 @@ pi install git:github.com/bry-guy/pi-ez-chat-threads
 ```
 
 If pi is already running, run `/reload` after installing.
+
+Recommended companions: `pi-ez-chat-mount` for making your host repo available inside chat VMs, and `pi-ez-secret-broker` for secret-backed workflows.
 
 ## First-time Discord setup
 
@@ -48,11 +50,11 @@ That does the whole handoff using the connected Discord channel as the parent:
 
 1. Creates a Discord thread named `Fix login tests`.
 2. Adds it to pi-chat config as a new conversation.
-3. Copies the current channel workspace into the thread workspace if it is empty.
+3. Inherits the parent channel's `pi-ez-chat-mount` mount configuration.
 4. Forks the current pi session into that thread's worker session directory.
 5. Starts a tmux worker connected to the thread.
 
-Now talk in that Discord thread. It is its own continuous pi session.
+Now talk in that Discord thread. It is its own continuous pi session. Forking from inside a managed thread is intentionally disallowed; run `/chat-thread` from the parent channel instead.
 
 ## Choose which pi session the thread continues
 
@@ -149,6 +151,14 @@ pi-chat forwards that text to pi; this package intercepts it before the agent tr
 
 For now, this is implemented as a pi extension input hook rather than a native pi-chat remote command registry. Native third-party remote commands would require a small upstream pi-chat extension point.
 
+## Mounts
+
+`pi-ez-chat-threads` no longer copies the parent channel `/workspace` into the thread. The thread's `/workspace` remains pi-chat-managed scratch for memory, incoming files, skills, and agent-written files.
+
+If you want your local repo available in the thread VM, install/use `pi-ez-chat-mount` in the parent channel first. When a thread is created, this package copies the parent's entries from `~/.pi/agent/chat-mount/mounts.json` to the new thread conversation id, preserving guest paths and `rw`/`ro` modes. Re-running `/chat-thread` for an existing thread re-syncs mounts from the current parent state.
+
+`pi-ez-chat-handoff` has been deleted and is not the path for “use my local repo from chat”; use `pi-ez-chat-mount` instead.
+
 ## Main channel versus thread sessions
 
 The intended workflow is:
@@ -188,4 +198,10 @@ npm run check          # typecheck + smoke tests
 npm pack --dry-run     # inspect publishable files
 ```
 
-The smoke tests cover extension registration, Discord API payloads, pi-chat config mutation, workspace seeding, session forking, and worker command generation.
+The smoke tests cover extension registration, Discord API payloads, pi-chat config mutation, mount inheritance, session forking, and worker command generation.
+
+## Related packages
+
+- [`pi-chat`](https://github.com/earendil-works/pi-chat) — chat transport and conversation workspaces.
+- [`pi-ez-chat-mount`](https://github.com/bry-guy/pi-ez-chat-mount) — host-repo mounts inherited by new threads.
+- [`pi-ez-secret-broker`](https://github.com/bry-guy/pi-ez-secret-broker) — companion secret workflow support.

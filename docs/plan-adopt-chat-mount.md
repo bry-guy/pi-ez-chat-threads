@@ -1,6 +1,6 @@
 # Plan: adopt pi-ez-chat-mount, drop workspace copy-seeding
 
-Status: planning. No code changes yet.
+Status: implemented in 0.3.0.
 
 ## Goal
 
