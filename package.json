@@ -1,6 +1,6 @@
 {
   "name": "pi-ez-chat-threads",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Create persistent Discord thread-backed pi-chat sessions from the current pi-chat context.",
   "repository": {
     "type": "git",

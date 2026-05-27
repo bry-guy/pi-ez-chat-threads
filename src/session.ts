@@ -1,13 +1,10 @@
-import { execFile, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 
 import { CHAT_HOME, PI_CHAT_STATE_TYPE, THREAD_STATE_TYPE, tmuxSafeName, type ResolvedConversation } from "./chat.js";
-
-const execFileP = promisify(execFile);
 
 export interface SourceSessionChoice {
 	label: string;
@@ -72,17 +69,6 @@ export function defaultThreadName(session: Pick<SessionManager, "getSessionName"
 	const explicit = session.getSessionName()?.trim();
 	if (explicit) return explicit.slice(0, 90);
 	return `pi ${session.getSessionId().slice(0, 8)}`;
-}
-
-export async function seedThreadWorkspace(parent: ResolvedConversation, thread: ResolvedConversation): Promise<number> {
-	await mkdir(thread.workspaceDir, { recursive: true });
-	const existing = await readdir(thread.workspaceDir).catch(() => []);
-	const userContent = existing.filter((name) => name !== "memory.md" && name !== "skills" && name !== "incoming");
-	if (userContent.length === 0) {
-		await mkdir(parent.workspaceDir, { recursive: true });
-		await execFileP("cp", ["-a", `${parent.workspaceDir}/.`, thread.workspaceDir]);
-	}
-	return countFiles(thread.workspaceDir);
 }
 
 export async function forkSessionForThread(params: {
@@ -150,18 +136,6 @@ export function spawnThreadWorker(params: {
 	const result = spawn("tmux", ["new-session", "-d", "-s", tmuxName, "-c", params.cwd, command], { encoding: "utf8" });
 	if (result.error || result.status !== 0) throw new Error(result.stderr?.toString().trim() || result.error?.message || "tmux failed");
 	return `started (${tmuxName})`;
-}
-
-async function countFiles(dir: string): Promise<number> {
-	let count = 0;
-	async function walk(current: string): Promise<void> {
-		for (const entry of await readdir(current, { withFileTypes: true }).catch(() => [])) {
-			if (entry.isDirectory()) await walk(join(current, entry.name));
-			else count++;
-		}
-	}
-	await walk(dir);
-	return count;
 }
 
 export async function resetDir(path: string): Promise<void> {

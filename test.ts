@@ -1,10 +1,12 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import extension from "./index.js";
+import extension, { assertCanForkFromParent } from "./index.js";
 import { addThreadConversation, listDiscordParentConversations, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread } from "./src/discord.js";
+import { inheritMounts, readMountsConfig, writeMountsConfig } from "./src/mounts.js";
+import { matchSlashCommand, stripLeadingMention } from "./src/match.js";
 import {
 	buildWorkerCommand,
 	defaultThreadName,
@@ -12,7 +14,6 @@ import {
 	forkSessionForThread,
 	getCurrentPiChatConversationId,
 	getExistingThreadState,
-	seedThreadWorkspace,
 	spawnThreadWorker,
 	type ThreadState,
 } from "./src/session.js";
@@ -53,12 +54,10 @@ async function main() {
 		check("pi extension registers /chat-thread", registered === "chat-thread");
 		check("pi extension registers remote input hook", inputHook);
 		check("remote input hook ignores normal text", !!inputHandler);
+		check("remote matcher strips simple mentions", stripLeadingMention("@bot /chat-thread hi") === "/chat-thread hi");
+		check("remote matcher strips Discord mentions", matchSlashCommand("<@123> /chat-thread hi", ["chat-thread"])?.args === "hi");
 
 		const parent = fakeConversation(work, "main", "parent-channel-id");
-		await mkdir(parent.workspaceDir, { recursive: true });
-		await writeFile(join(parent.workspaceDir, "README.md"), "hello\n");
-		await mkdir(join(parent.workspaceDir, ".git"));
-		await writeFile(join(parent.workspaceDir, ".git", "HEAD"), "ref: refs/heads/main\n");
 
 		const config: ChatConfig = { accounts: { acct: { ...parent.account, channels: { main: parent.channel } } } };
 		const thread = addThreadConversation({ config, parent, threadId: "1234567890", threadName: "feature idea", sessionId: "sess1" });
@@ -72,11 +71,33 @@ async function main() {
 		check("parent picker includes normal Discord channel", parents.some((c) => c.conversationId === parent.conversationId));
 		check("parent picker excludes managed threads", !parents.some((c) => c.conversationId === thread.conversationId));
 
-		const copied = await seedThreadWorkspace(parent, thread);
-		check("workspace seeded", copied >= 2, String(copied));
-		const ws = await readdir(thread.workspaceDir);
-		check("workspace has README", ws.includes("README.md"));
-		check("workspace has .git", ws.includes(".git"));
+		const mountsPath = join(work, "chat-mount", "mounts.json");
+		await writeMountsConfig({
+			[parent.conversationId]: {
+				"/repo-main": { hostPath: "/host/repo", mode: "rw" },
+				"/docs": { hostPath: "/host/docs", mode: "ro" },
+			},
+		}, mountsPath);
+		const inherited = await inheritMounts(parent.conversationId, thread.conversationId, mountsPath);
+		check("mount inheritance reports guest paths", inherited.inherited.join(",") === "/docs,/repo-main", inherited.inherited.join(","));
+		let mounts = await readMountsConfig(mountsPath);
+		check("mount inheritance writes thread entry", mounts[thread.conversationId]?.["/repo-main"]?.hostPath === "/host/repo");
+		const inheritedAgain = await inheritMounts(parent.conversationId, thread.conversationId, mountsPath);
+		mounts = await readMountsConfig(mountsPath);
+		check("mount inheritance is idempotent", inheritedAgain.inherited.length === 2 && Object.keys(mounts[thread.conversationId] ?? {}).length === 2);
+		await writeMountsConfig({
+			[parent.conversationId]: { "/other": { hostPath: "/host/other", mode: "rw" } },
+			[thread.conversationId]: { "/stale": { hostPath: "/host/stale", mode: "rw" } },
+		}, mountsPath);
+		await inheritMounts(parent.conversationId, thread.conversationId, mountsPath);
+		mounts = await readMountsConfig(mountsPath);
+		check("re-running mount inheritance mirrors parent state", !!mounts[thread.conversationId]?.["/other"] && !mounts[thread.conversationId]?.["/stale"]);
+		const missingInherited = await inheritMounts("acct/missing", thread.conversationId, join(work, "missing", "mounts.json"));
+		check("missing mounts file inherits none", missingInherited.inherited.length === 0);
+
+		let managedRejected = false;
+		try { assertCanForkFromParent({ channel: { ...thread.channel, managedBy: "pi-ez-chat-threads" } }); } catch { managedRejected = true; }
+		check("managed-thread parent is rejected", managedRejected);
 
 		const entries: any[] = [
 			{ type: "custom", customType: "pi-chat-state", data: { conversationId: "acct/main" } },

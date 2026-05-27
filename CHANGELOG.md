@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-05-25
+
+### Breaking
+- No longer copies parent channel `/workspace` into thread `/workspace`. Mounts configured by `pi-ez-chat-mount` are inherited instead. Use `pi-ez-chat-mount` if you want your host repo available in the thread VM.
+
+### Added
+- Inherit parent `pi-ez-chat-mount` entries from `~/.pi/agent/chat-mount/mounts.json` when creating a managed thread.
+- Reject `/chat-thread` when run from inside an existing managed thread.
+
 ## [0.2.1] - 2026-05-23
 
 ### Fixed
