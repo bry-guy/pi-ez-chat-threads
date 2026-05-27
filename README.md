@@ -46,6 +46,12 @@ From a pi session that is already connected to a Discord pi-chat channel:
 /chat-thread Fix login tests
 ```
 
+From pi-chat itself, including mention-only channels:
+
+```text
+@bot /chat-thread Fix login tests
+```
+
 That does the whole handoff using the connected Discord channel as the parent:
 
 1. Creates a Discord thread named `Fix login tests`.

@@ -3,6 +3,7 @@ import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earen
 import { addThreadConversation, listDiscordParentConversations, loadChatConfig, resolveConversation, saveChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread, sendDiscordThreadIntro } from "./src/discord.js";
 import { inheritMounts } from "./src/mounts.js";
+import { matchSlashCommand } from "./src/match.js";
 import {
 	defaultThreadName,
 	forkSessionForThread,
@@ -205,9 +206,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("input", async (event, ctx) => {
-		const text = event.text.trim();
-		if (!text.startsWith("/chat-thread") && !text.startsWith("/chat-ez-thread")) return { action: "continue" };
-		const raw = text.replace(/^\/(chat-thread|chat-ez-thread)\b/, "").trim();
+		const match = matchSlashCommand(event.text, ["chat-thread", "chat-ez-thread"]);
+		if (!match) return { action: "continue" };
+		const raw = match.args;
 		try {
 			const result = await createOrReuseThread(raw, ctx);
 			return {

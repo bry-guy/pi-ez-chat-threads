@@ -6,6 +6,7 @@ import extension, { assertCanForkFromParent } from "./index.js";
 import { addThreadConversation, listDiscordParentConversations, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread } from "./src/discord.js";
 import { inheritMounts, readMountsConfig, writeMountsConfig } from "./src/mounts.js";
+import { matchSlashCommand, stripLeadingMention } from "./src/match.js";
 import {
 	buildWorkerCommand,
 	defaultThreadName,
@@ -53,6 +54,8 @@ async function main() {
 		check("pi extension registers /chat-thread", registered === "chat-thread");
 		check("pi extension registers remote input hook", inputHook);
 		check("remote input hook ignores normal text", !!inputHandler);
+		check("remote matcher strips simple mentions", stripLeadingMention("@bot /chat-thread hi") === "/chat-thread hi");
+		check("remote matcher strips Discord mentions", matchSlashCommand("<@123> /chat-thread hi", ["chat-thread"])?.args === "hi");
 
 		const parent = fakeConversation(work, "main", "parent-channel-id");
 
