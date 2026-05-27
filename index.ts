@@ -31,6 +31,10 @@ function isRemoteContext(ctx: ExtensionContext): boolean {
 	return ctx.sessionManager.getEntries().some((entry) => entry.type === "custom_message" && entry.customType === "chat-context");
 }
 
+export function canPrompt(ctx: Pick<ExtensionContext, "hasUI">, forceNonInteractive = false): boolean {
+	return !forceNonInteractive && ctx.hasUI;
+}
+
 function parseArgs(raw: string): Args {
 	const args: Args = { newThread: false, noSpawn: false, restart: false };
 	const name: string[] = [];
@@ -69,6 +73,7 @@ async function chooseParentConversation(
 	ctx: ExtensionContext,
 	explicitId?: string,
 	connectedId?: string,
+	forceNonInteractive = false,
 ): Promise<ResolvedConversation> {
 	const selectedId = explicitId ?? connectedId;
 	if (selectedId) {
@@ -80,7 +85,7 @@ async function chooseParentConversation(
 
 	const choices = listDiscordParentConversations(config);
 	if (choices.length === 0) throw new Error("No configured Discord pi-chat channels. Run /chat-config first.");
-	if (!ctx.hasUI) throw new Error("No connected pi-chat context. Pass --parent=<account/channel>.");
+	if (!canPrompt(ctx, forceNonInteractive)) throw new Error("No connected pi-chat context. Pass --parent=<account/channel>.");
 	const labels = choices.map((c) => `${c.conversationName}  (${c.conversationId})`);
 	const picked = await ctx.ui.select("Create Discord thread under which channel?", labels);
 	const idx = labels.indexOf(picked ?? "");
@@ -91,11 +96,12 @@ async function chooseParentConversation(
 async function chooseSourceSession(
 	ctx: ExtensionContext,
 	parent: ResolvedConversation,
+	forceNonInteractive = false,
 ): Promise<{ path: string; description: string }> {
 	const current = ctx.sessionManager.getSessionFile();
 	const parentWorker = await findMostRecentWorkerSession(parent.conversationId);
 
-	if (!ctx.hasUI) {
+	if (!canPrompt(ctx, forceNonInteractive)) {
 		if (isRemoteContext(ctx) && parentWorker) {
 			return { path: parentWorker, description: `parent worker session for ${parent.conversationId}` };
 		}
@@ -122,13 +128,13 @@ async function chooseSourceSession(
 	return { path: sessions[idx].path, description: sessions[idx].label };
 }
 
-async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<string> {
+async function createOrReuseThread(raw: string, ctx: ExtensionContext, options: { remote?: boolean } = {}): Promise<string> {
 	const args = parseArgs(raw);
 	const entries = ctx.sessionManager.getEntries();
 	const connectedConversationId = getCurrentPiChatConversationId(entries);
 
 	const config = await loadChatConfig();
-	const parent = await chooseParentConversation(config, ctx, args.parentConversationId, connectedConversationId);
+	const parent = await chooseParentConversation(config, ctx, args.parentConversationId, connectedConversationId, options.remote);
 	assertCanForkFromParent(parent);
 	const parentConversationId = parent.conversationId;
 
@@ -144,7 +150,7 @@ async function createOrReuseThread(raw: string, ctx: ExtensionContext): Promise<
 		].join("\n");
 	}
 
-	const sourceSession = await chooseSourceSession(ctx, parent);
+	const sourceSession = await chooseSourceSession(ctx, parent, options.remote);
 
 	const sourceName = (() => {
 		try { return SessionManager.open(sourceSession.path).getSessionName(); } catch { return undefined; }
@@ -210,7 +216,7 @@ export default function (pi: ExtensionAPI) {
 		if (!match) return { action: "continue" };
 		const raw = match.args;
 		try {
-			const result = await createOrReuseThread(raw, ctx);
+			const result = await createOrReuseThread(raw, ctx, { remote: true });
 			return {
 				action: "transform",
 				text: `The remote /chat-thread command completed. Reply to the user with this result exactly:\n\n${result}`,

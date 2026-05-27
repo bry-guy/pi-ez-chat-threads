@@ -50,5 +50,8 @@
     "@types/node": "^24.5.2",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "pi-ez-lib": "https://github.com/bry-guy/pi-ez-lib/archive/refs/tags/v0.1.2.tar.gz"
   }
 }

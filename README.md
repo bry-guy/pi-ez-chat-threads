@@ -153,7 +153,9 @@ When this package is loaded in the pi-chat worker, Discord users can send the sa
 /chat-thread Fix login tests
 ```
 
-pi-chat forwards that text to pi; this package intercepts it before the agent treats it as a normal prompt, creates the thread, and asks the agent to report the result back. This works best from a connected Discord pi-chat channel because the current chat connection supplies the parent channel.
+pi-chat forwards that text to pi; this package intercepts it before the agent treats it as a normal prompt, creates the thread, and asks the agent to report the result back. This works best from a connected Discord pi-chat channel because the current chat connection supplies the parent channel. Mention-only bridges are supported whether the bot mention appears before or after the slash command, including transcript-shaped forwarded lines like `- [time] [uid:...] user: <@bot> /chat-thread ...`.
+
+Remote `/chat-thread` handling is always non-interactive, even if the worker process has a UI-capable context. It uses the connected parent channel and the current parent worker session when available; pass `--parent=<account/channel>` when no pi-chat context is connected.
 
 For now, this is implemented as a pi extension input hook rather than a native pi-chat remote command registry. Native third-party remote commands would require a small upstream pi-chat extension point.
 

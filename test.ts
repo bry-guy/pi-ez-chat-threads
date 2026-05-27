@@ -2,11 +2,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import extension, { assertCanForkFromParent } from "./index.js";
+import extension, { assertCanForkFromParent, canPrompt } from "./index.js";
 import { addThreadConversation, listDiscordParentConversations, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { createDiscordThread } from "./src/discord.js";
 import { inheritMounts, readMountsConfig, writeMountsConfig } from "./src/mounts.js";
-import { matchSlashCommand, stripLeadingMention } from "./src/match.js";
+import { matchSlashCommand, normalizeRemoteCommandText, stripLeadingMention } from "./src/match.js";
 import {
 	buildWorkerCommand,
 	defaultThreadName,
@@ -56,6 +56,11 @@ async function main() {
 		check("remote input hook ignores normal text", !!inputHandler);
 		check("remote matcher strips simple mentions", stripLeadingMention("@bot /chat-thread hi") === "/chat-thread hi");
 		check("remote matcher strips Discord mentions", matchSlashCommand("<@123> /chat-thread hi", ["chat-thread"])?.args === "hi");
+		check("remote matcher strips trailing Discord mentions", matchSlashCommand("/chat-thread hi <@123>", ["chat-thread"])?.args === "hi");
+		check("remote matcher handles transcript-shaped mention commands", matchSlashCommand("- [2026-05-27T12:00:00.000Z] [uid:123] prettybry: <@1496> /chat-thread", ["chat-thread"])?.args === "");
+		check("remote matcher handles transcript-shaped trailing mentions", matchSlashCommand("- [2026-05-27T12:00:00.000Z] [uid:123] prettybry: /chat-thread foobar <@1496>", ["chat-thread"])?.args === "foobar");
+		check("remote normalizer preserves non-command text after transcript stripping", normalizeRemoteCommandText("- [2026-05-27T12:00:00.000Z] [uid:123] prettybry: hello") === "hello");
+		check("remote /chat-thread disables interactive prompts even if UI is present", !canPrompt({ hasUI: true } as any, true));
 
 		const parent = fakeConversation(work, "main", "parent-channel-id");
 
