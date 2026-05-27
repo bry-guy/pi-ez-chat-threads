@@ -20,7 +20,7 @@ Install both `pi-chat` and this package in the same pi environment:
 
 ```bash
 pi install git:github.com/earendil-works/pi-chat
-pi install git:github.com/bry-guy/pi-ez-chat-threads
+pi install /absolute/path/to/pi-ez-chat-threads
 ```
 
 If pi is already running, run `/reload` after installing.
