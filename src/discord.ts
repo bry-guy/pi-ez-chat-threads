@@ -54,6 +54,45 @@ export async function sendDiscordChannelMessage(params: {
 	}).catch(() => undefined);
 }
 
+export async function renameDiscordThread(params: {
+	account: ChatAccountConfig;
+	threadId: string;
+	name: string;
+	fetchImpl?: typeof fetch;
+}): Promise<void> {
+	if (params.account.service !== "discord") throw new Error("/chat-thread only supports Discord conversations");
+	if (!params.account.botToken) throw new Error("Discord bot token missing from pi-chat account config");
+	const fetcher = params.fetchImpl ?? fetch;
+	const response = await fetcher(`https://discord.com/api/v10/channels/${params.threadId}`, {
+		method: "PATCH",
+		headers: { Authorization: `Bot ${params.account.botToken}`, "content-type": "application/json" },
+		body: JSON.stringify({ name: params.name.slice(0, 90) }),
+	});
+	if (!response.ok) {
+		const data = (await response.json().catch(() => ({}))) as { message?: string };
+		throw new Error(data.message || `Discord thread rename failed with HTTP ${response.status}`);
+	}
+}
+
+export async function closeDiscordThread(params: {
+	account: ChatAccountConfig;
+	threadId: string;
+	fetchImpl?: typeof fetch;
+}): Promise<void> {
+	if (params.account.service !== "discord") throw new Error("/chat-thread only supports Discord conversations");
+	if (!params.account.botToken) throw new Error("Discord bot token missing from pi-chat account config");
+	const fetcher = params.fetchImpl ?? fetch;
+	const response = await fetcher(`https://discord.com/api/v10/channels/${params.threadId}`, {
+		method: "PATCH",
+		headers: { Authorization: `Bot ${params.account.botToken}`, "content-type": "application/json" },
+		body: JSON.stringify({ archived: true, locked: true }),
+	});
+	if (!response.ok) {
+		const data = (await response.json().catch(() => ({}))) as { message?: string };
+		throw new Error(data.message || `Discord thread close failed with HTTP ${response.status}`);
+	}
+}
+
 export async function sendDiscordThreadIntro(params: {
 	account: ChatAccountConfig;
 	threadId: string;

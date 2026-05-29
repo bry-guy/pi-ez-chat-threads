@@ -144,6 +144,17 @@ export function listDiscordParentConversations(config: ChatConfig): ResolvedConv
 	return out.sort((a, b) => a.conversationId.localeCompare(b.conversationId));
 }
 
+export function removeConversation(config: ChatConfig, conversationId: string): boolean {
+	const slash = conversationId.indexOf("/");
+	if (slash === -1) return false;
+	const accountId = conversationId.slice(0, slash);
+	const channelKey = conversationId.slice(slash + 1);
+	const account = config.accounts?.[accountId];
+	if (!account?.channels?.[channelKey]) return false;
+	delete account.channels[channelKey];
+	return true;
+}
+
 export function addThreadConversation(params: {
 	config: ChatConfig;
 	parent: ResolvedConversation;

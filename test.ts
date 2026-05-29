@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import extension, { assertCanForkFromParent, canPrompt, parseSubcommand } from "./index.js";
-import { addThreadConversation, listDiscordParentConversations, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
-import { findByName, listForParent, normalizeThreadName, readCatalog, upsertEntry, writeCatalog, type ThreadCatalogEntry } from "./src/catalog.js";
-import { createDiscordThread } from "./src/discord.js";
-import { inheritMounts, readMountsConfig, writeMountsConfig } from "./src/mounts.js";
+import { addThreadConversation, listDiscordParentConversations, removeConversation, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
+import { findByName, listForParent, normalizeThreadName, readCatalog, removeEntry, upsertEntry, writeCatalog, type ThreadCatalogEntry } from "./src/catalog.js";
+import { closeDiscordThread, createDiscordThread, renameDiscordThread } from "./src/discord.js";
+import { inheritMounts, readMountsConfig, removeMountsForConversation, writeMountsConfig } from "./src/mounts.js";
 import { matchSlashCommand, normalizeRemoteCommandText, stripLeadingMention } from "./src/match.js";
 import {
 	forkSessionForThread,
@@ -71,6 +71,9 @@ async function main() {
 		check("parser supports stop <name>", (() => { const s = parseSubcommand("stop Fix login"); return s.verb === "stop" && s.name === "Fix login"; })());
 		check("parser supports restart <name>", (() => { const s = parseSubcommand("restart Fix login"); return s.verb === "restart" && s.name === "Fix login"; })());
 		check("parser supports restart with no name", parseSubcommand("restart").verb === "restart");
+		check("parser supports kill <name>", (() => { const s = parseSubcommand("kill Fix login"); return s.verb === "kill" && s.name === "Fix login"; })());
+		check("parser supports kill with no name", parseSubcommand("kill").verb === "kill");
+		check("parser supports rename <target> <name>", (() => { const s = parseSubcommand("rename old-name New Name"); return s.verb === "rename" && s.name === "old-name" && s.newName === "New Name"; })());
 		check("parser supports list alias", parseSubcommand("ls").verb === "list");
 		check("parser supports --parent on bare-name shorthand", (() => { const s = parseSubcommand("Fix login --parent=acct/main"); return s.verb === "start" && s.parentConversationId === "acct/main"; })());
 		check("parser supports --parent on explicit verb", (() => { const s = parseSubcommand("start Fix login --parent=acct/main"); return s.verb === "start" && s.parentConversationId === "acct/main"; })());
@@ -110,6 +113,8 @@ async function main() {
 		check("catalog upsert+read", readBack.threads[thread.conversationId]?.normalizedName === "feature-idea");
 		check("catalog findByName works", findByName(readBack, parent.conversationId, "feature-idea")?.threadConversationId === thread.conversationId);
 		check("catalog listForParent works", listForParent(readBack, parent.conversationId).length === 1);
+		check("catalog removeEntry works", (() => { const copy = { version: 1 as const, threads: { ...readBack.threads } }; return removeEntry(copy, thread.conversationId) && !copy.threads[thread.conversationId]; })());
+		check("chat config removeConversation works", removeConversation(config, thread.conversationId) && !config.accounts.acct.channels[thread.channelKey]);
 
 		// Legacy catalog migration: endedAt -> stoppedAt
 		const legacyCatalogPath = join(work, "legacy-catalog.json");
@@ -144,6 +149,9 @@ async function main() {
 		check("mount inheritance reports guest paths", inherited.inherited.join(",") === "/docs,/repo-main", inherited.inherited.join(","));
 		let mounts = await readMountsConfig(mountsPath);
 		check("mount inheritance writes thread entry", mounts[thread.conversationId]?.["/repo-main"]?.hostPath === "/host/repo");
+		check("mount remove deletes thread entry", await removeMountsForConversation(thread.conversationId, mountsPath));
+		mounts = await readMountsConfig(mountsPath);
+		check("mount remove keeps parent entry", !!mounts[parent.conversationId] && !mounts[thread.conversationId]);
 
 		let managedRejected = false;
 		try { assertCanForkFromParent({ channel: { ...thread.channel, managedBy: "pi-ez-chat-threads" } }); } catch { managedRejected = true; }
@@ -180,6 +188,32 @@ async function main() {
 		});
 		check("discord API endpoint targets parent channel", requestedUrl.endsWith("/channels/parent-channel-id/threads"));
 		check("discord thread result parsed", created.id === "thread-id" && created.name === "My Session");
+		let renameRequested = "";
+		await renameDiscordThread({
+			account: parent.account,
+			threadId: "thread-id",
+			name: "Renamed Thread",
+			fetchImpl: (async (url: any, init: any) => {
+				renameRequested = String(url);
+				const body = JSON.parse(init.body);
+				check("discord rename sends name", body.name === "Renamed Thread");
+				return { ok: true, status: 200, json: async () => ({}) } as Response;
+			}) as typeof fetch,
+		});
+		check("discord rename endpoint targets thread channel", renameRequested.endsWith("/channels/thread-id"));
+		let closeRequested = "";
+		await closeDiscordThread({
+			account: parent.account,
+			threadId: "thread-id",
+			fetchImpl: (async (url: any, init: any) => {
+				closeRequested = String(url);
+				const body = JSON.parse(init.body);
+				check("discord close archives thread", body.archived === true);
+				check("discord close locks thread", body.locked === true);
+				return { ok: true, status: 200, json: async () => ({}) } as Response;
+			}) as typeof fetch,
+		});
+		check("discord close endpoint targets thread channel", closeRequested.endsWith("/channels/thread-id"));
 
 		const fakeSession = join(work, "host.jsonl");
 		const header = { type: "session", version: 3, id: "host", timestamp: "2026-01-01T00:00:00.000Z", cwd: parent.workspaceDir };

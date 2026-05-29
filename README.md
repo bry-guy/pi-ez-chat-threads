@@ -35,18 +35,21 @@ All commands work the same from a pi session and from Discord (`@bot /chat-threa
 - `/chat-thread stop <name>` (from the parent channel) — Stop a named thread.
 - `/chat-thread restart <name>` — Force-restart a thread by name (from anywhere).
 - `/chat-thread restart` (inside a thread) — Force-restart the current thread. The worker exits and is respawned; the response message is posted directly to Discord, not via the agent.
+- `/chat-thread kill <name>` — Destructive delete: stop the worker, remove this package's catalog entry, remove the pi-chat conversation entry, remove inherited mount config, and close the Discord thread.
+- `/chat-thread kill` (inside a thread) — Kill the current thread. The worker exits and the Discord thread is closed.
+- `/chat-thread rename <target> <name>` — Rename a managed thread in the catalog, pi-chat conversation config, and Discord.
 - `/chat-thread list` — List managed threads for the connected channel and show worker status.
 - `--parent=<account/channel>` — Specify a parent channel explicitly when no pi-chat context is connected.
 
 Names are required for `start`. There is no automatic naming from the current pi session; explicit names are how you and the agent agree on identity, especially from Discord where pi session names are invisible.
 
-Lifecycle is `start → stop → (re)start`. There is no `end` and no `--reactivate`; `start <name>` on a stopped thread restarts it. The catalog records `stoppedAt` rather than `endedAt`; the Discord thread and session file are always preserved.
+Lifecycle is `start → stop → (re)start`, with `kill` as the destructive cleanup path. There is no `end` and no `--reactivate`; `start <name>` on a stopped thread restarts it. The catalog records `stoppedAt` rather than `endedAt`; `stop` preserves the Discord thread and session file, while `kill` removes local thread configuration and closes the Discord thread.
 
 ## Use from Discord
 
 Mentions before or after the command work, and transcript-shaped forwarded lines like `- [time] [uid:...] user: <@bot> /chat-thread ...` are also recognized. Remote `/chat-thread` is always non-interactive — no picker prompts are issued from worker contexts.
 
-Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` / `Restarting pi-chat thread X.`) are posted directly to the thread's Discord channel by the bot. For self-stop and self-restart this is necessary because the worker dies before any agent reply could be delivered.
+Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` / `Restarting pi-chat thread X.` / `Killing pi-chat thread X.`) are posted directly to the thread's Discord channel by the bot. For self-stop, self-restart, and self-kill this is necessary because the worker dies before any agent reply could be delivered.
 
 ## What `start <name>` does for a new thread
 
@@ -71,6 +74,23 @@ Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` /
 - Kills the worker tmux.
 - Sets `stoppedAt` in the catalog.
 - Leaves the Discord thread, the pi-chat conversation entry, and the session file in place.
+
+## What `rename` does
+
+- Renames the Discord thread.
+- Updates the lifecycle catalog name and normalized lookup name.
+- Updates the pi-chat managed conversation display name.
+- Does not rename the conversation id/channel key or any session files.
+
+## What `kill` does
+
+- Posts `Killing pi-chat thread <name>.` to the Discord thread.
+- Archives and locks the Discord thread.
+- Kills the worker tmux.
+- Removes the thread from `~/.pi/agent/chat-threads/threads.json`.
+- Removes the managed thread conversation from `~/.pi/agent/chat/config.json`.
+- Removes inherited mount config for the thread from `~/.pi/agent/chat-mount/mounts.json`.
+- Leaves historical session files on disk.
 
 ## Why no `/chat-reload`
 

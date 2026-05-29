@@ -87,3 +87,9 @@ export function upsertEntry(catalog: ThreadCatalog, entry: ThreadCatalogEntry): 
 	catalog.threads[entry.threadConversationId] = entry;
 	return catalog;
 }
+
+export function removeEntry(catalog: ThreadCatalog, threadConversationId: string): boolean {
+	if (!(threadConversationId in catalog.threads)) return false;
+	delete catalog.threads[threadConversationId];
+	return true;
+}

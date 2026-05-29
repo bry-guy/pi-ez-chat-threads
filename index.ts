@@ -1,8 +1,11 @@
+import { stat } from "node:fs/promises";
+
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
 	addThreadConversation,
 	loadChatConfig,
+	removeConversation,
 	resolveConversation,
 	saveChatConfig,
 	type ResolvedConversation,
@@ -13,12 +16,13 @@ import {
 	listForParent,
 	normalizeThreadName,
 	readCatalog,
+	removeEntry,
 	upsertEntry,
 	writeCatalog,
 	type ThreadCatalogEntry,
 } from "./src/catalog.js";
-import { createDiscordThread, sendDiscordChannelMessage, sendDiscordThreadIntro } from "./src/discord.js";
-import { inheritMounts } from "./src/mounts.js";
+import { closeDiscordThread, createDiscordThread, renameDiscordThread, sendDiscordChannelMessage, sendDiscordThreadIntro } from "./src/discord.js";
+import { inheritMounts, removeMountsForConversation } from "./src/mounts.js";
 import { matchSlashCommand } from "./src/match.js";
 import {
 	forkSessionForThread,
@@ -29,15 +33,16 @@ import {
 } from "./src/session.js";
 import { isWorkerAlive, killWorker, startWorker } from "./src/worker.js";
 
-type Verb = "start" | "stop" | "restart" | "list" | "help";
+type Verb = "start" | "stop" | "restart" | "kill" | "rename" | "list" | "help";
 
 export interface Subcommand {
 	verb: Verb;
 	name?: string;
+	newName?: string;
 	parentConversationId?: string;
 }
 
-const VERBS: ReadonlySet<string> = new Set(["start", "stop", "restart", "list", "help"]);
+const VERBS: ReadonlySet<string> = new Set(["start", "stop", "restart", "kill", "rename", "list", "help"]);
 
 function tokenize(raw: string): string[] {
 	return raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((t) => t.replace(/^["']|["']$/g, "")) ?? [];
@@ -72,6 +77,10 @@ export function parseSubcommand(raw: string): Subcommand {
 
 	if (VERBS.has(first)) {
 		const flags = parseFlags(tokens.slice(1));
+		if (first === "rename") {
+			const [name, ...rest] = flags.positional;
+			return { verb: "rename", name, newName: rest.join(" ").trim() || undefined, parentConversationId: flags.parentConversationId };
+		}
 		const name = flags.positional.join(" ").trim() || undefined;
 		return { verb: first as Verb, name, parentConversationId: flags.parentConversationId };
 	}
@@ -89,6 +98,8 @@ const USAGE = [
 	"  /chat-thread start <name>           Start a new thread, or attach to an existing one (auto-restart if stopped).",
 	"  /chat-thread stop [name]            Stop the current thread (no name) or a named thread (from the parent channel).",
 	"  /chat-thread restart [name]         Force-restart the current thread or a named one. Recreates the tmux worker.",
+	"  /chat-thread kill [name]            Stop, delete local config, and close the Discord thread.",
+	"  /chat-thread rename <target> <name> Rename a managed thread locally and in Discord.",
 	"  /chat-thread list                   List threads for the connected channel and show worker status.",
 	"  /chat-thread <verb> --parent=<a/b>  Specify parent channel when no pi-chat context is connected.",
 ].join("\n");
@@ -129,36 +140,61 @@ async function listThreads(parent: ResolvedConversation): Promise<string> {
 	return lines.join("\n");
 }
 
+async function existingSessionFile(path: string | undefined): Promise<string | undefined> {
+	if (!path) return undefined;
+	const info = await stat(path).catch(() => undefined);
+	return info?.isFile() ? path : undefined;
+}
+
 async function createFreshThread(
 	rawName: string,
 	normalizedName: string,
 	parent: ResolvedConversation,
 	ctx: ExtensionContext,
 ): Promise<{ entry: ThreadCatalogEntry; message: string }> {
-	const sourceSessionFile = ctx.sessionManager.getSessionFile() ?? (await findMostRecentWorkerSession(parent.conversationId));
+	const sourceSessionFile =
+		(await existingSessionFile(ctx.sessionManager.getSessionFile())) ??
+		(await existingSessionFile(await findMostRecentWorkerSession(parent.conversationId)));
 	if (!sourceSessionFile) throw new Error("No source pi session found to fork. Send a message in the parent channel first, or run /chat-thread from a persisted pi session.");
 
 	const config = await loadChatConfig();
 	const created = await createDiscordThread({ account: parent.account, parentChannelId: parent.channel.id, name: rawName.slice(0, 90) });
-	const thread = addThreadConversation({
-		config,
-		parent,
-		threadId: created.id,
-		threadName: created.name,
-		sessionId: ctx.sessionManager.getSessionId(),
-	});
-	await saveChatConfig(config);
-	const mountInheritance = await inheritMounts(parent.conversationId, thread.conversationId);
+	const createdAt = new Date().toISOString();
+	let thread: ResolvedConversation | undefined;
+	let mountInheritance: Awaited<ReturnType<typeof inheritMounts>> | undefined;
+	let forked = "";
+	let start: ReturnType<typeof startWorker> | undefined;
+	try {
+		thread = addThreadConversation({
+			config,
+			parent,
+			threadId: created.id,
+			threadName: created.name,
+			sessionId: ctx.sessionManager.getSessionId(),
+		});
+		await saveChatConfig(config);
+		mountInheritance = await inheritMounts(parent.conversationId, thread.conversationId);
 
-	const state: ThreadState = {
-		parentConversationId: parent.conversationId,
-		threadConversationId: thread.conversationId,
-		threadId: created.id,
-		threadName: created.name,
-		createdAt: new Date().toISOString(),
-	};
-	const forked = await forkSessionForThread({ sourceSessionFile, thread, threadState: state, workerCwd: ctx.cwd });
-	const start = startWorker({ conversationId: thread.conversationId, sessionFile: forked, cwd: ctx.cwd });
+		const state: ThreadState = {
+			parentConversationId: parent.conversationId,
+			threadConversationId: thread.conversationId,
+			threadId: created.id,
+			threadName: created.name,
+			createdAt,
+		};
+		forked = await forkSessionForThread({ sourceSessionFile, thread, threadState: state, workerCwd: ctx.cwd });
+		start = startWorker({ conversationId: thread.conversationId, sessionFile: forked, cwd: ctx.cwd });
+	} catch (error) {
+		if (thread) {
+			removeConversation(config, thread.conversationId);
+			await saveChatConfig(config).catch(() => undefined);
+			await removeMountsForConversation(thread.conversationId).catch(() => undefined);
+		}
+		await closeDiscordThread({ account: parent.account, threadId: created.id }).catch(() => undefined);
+		throw error;
+	}
+
+	if (!thread || !mountInheritance || !start) throw new Error("Thread creation failed before worker startup completed.");
 
 	const entry: ThreadCatalogEntry = {
 		parentConversationId: parent.conversationId,
@@ -166,7 +202,7 @@ async function createFreshThread(
 		threadId: created.id,
 		name: created.name,
 		normalizedName,
-		createdAt: state.createdAt,
+		createdAt,
 		stoppedAt: null,
 		ownerSessionId: ctx.sessionManager.getSessionId(),
 		lastSessionFile: forked,
@@ -253,6 +289,30 @@ async function startOrAttach(rawName: string, parent: ResolvedConversation, ctx:
 	return message;
 }
 
+function resolveAccountForEntry(config: Awaited<ReturnType<typeof loadChatConfig>>, parent: ResolvedConversation | undefined, entry: ThreadCatalogEntry) {
+	return (parent && parent.accountId === entry.threadConversationId.split("/")[0]
+		? parent.account
+		: config.accounts[entry.threadConversationId.split("/")[0]]);
+}
+
+function resolveThreadEntry(
+	catalog: Awaited<ReturnType<typeof readCatalog>>,
+	target: { name?: string },
+	parent: ResolvedConversation | undefined,
+	currentThread: ThreadState | undefined,
+): ThreadCatalogEntry {
+	if (target.name) {
+		if (!parent) throw new Error("Specify --parent=<account/channel> or run from a channel with a connected parent.");
+		const entry = findByName(catalog, parent.conversationId, normalizeThreadName(target.name));
+		if (!entry) throw new Error(`No managed thread named '${target.name}' under ${parent.conversationId}.`);
+		return entry;
+	}
+	if (!currentThread) throw new Error("Not inside a managed thread. Run from inside the thread, or pass a name from the parent channel.");
+	const entry = findByThreadConversationId(catalog, currentThread.threadConversationId);
+	if (!entry) throw new Error(`Current thread is not in the catalog (${currentThread.threadConversationId}).`);
+	return entry;
+}
+
 async function stopThread(
 	target: { name?: string },
 	parent: ResolvedConversation | undefined,
@@ -260,24 +320,12 @@ async function stopThread(
 	options: { selfStop: boolean },
 ): Promise<string> {
 	const catalog = await readCatalog();
-	let entry: ThreadCatalogEntry | undefined;
-
-	if (target.name) {
-		if (!parent) throw new Error("Specify --parent=<account/channel> or run from a channel with a connected parent.");
-		entry = findByName(catalog, parent.conversationId, normalizeThreadName(target.name));
-		if (!entry) throw new Error(`No managed thread named '${target.name}' under ${parent.conversationId}.`);
-	} else {
-		if (!currentThread) throw new Error("Not inside a managed thread. Run /chat-thread stop <name> from the parent channel, or omit name from inside the thread.");
-		entry = findByThreadConversationId(catalog, currentThread.threadConversationId);
-		if (!entry) throw new Error(`Current thread is not in the catalog (${currentThread.threadConversationId}); cannot mark stopped.`);
-	}
+	const entry = resolveThreadEntry(catalog, target, parent, currentThread);
 
 	// Resolve the account once, since killing self-stops the worker and we need the bot token
 	// to post the notice before tmux dies. Reuse parent if it matches; otherwise re-resolve.
 	const config = await loadChatConfig();
-	const account = (parent && parent.accountId === entry.threadConversationId.split("/")[0]
-		? parent.account
-		: config.accounts[entry.threadConversationId.split("/")[0]]);
+	const account = resolveAccountForEntry(config, parent, entry);
 
 	if (account?.service === "discord") {
 		await sendDiscordChannelMessage({
@@ -303,6 +351,88 @@ async function stopThread(
 	if (options.selfStop) {
 		lines.push("", "This worker is about to exit. Restart with /chat-thread start <name> from the parent channel.");
 	}
+	return lines.join("\n");
+}
+
+async function renameThread(
+	target: { name?: string; newName?: string },
+	parent: ResolvedConversation | undefined,
+	currentThread: ThreadState | undefined,
+): Promise<string> {
+	if (!target.name) throw new Error("/chat-thread rename requires a <target> and <name>.");
+	if (!target.newName) throw new Error("/chat-thread rename requires a new <name>.");
+	const normalizedNewName = normalizeThreadName(target.newName);
+	if (!normalizedNewName) throw new Error("New thread name must contain alphanumeric characters.");
+
+	const catalog = await readCatalog();
+	const entry = resolveThreadEntry(catalog, { name: target.name }, parent, currentThread);
+	const conflict = parent ? findByName(catalog, parent.conversationId, normalizedNewName) : undefined;
+	if (conflict && conflict.threadConversationId !== entry.threadConversationId) {
+		throw new Error(`A managed thread named '${target.newName}' already exists under ${parent?.conversationId}.`);
+	}
+
+	const config = await loadChatConfig();
+	const account = resolveAccountForEntry(config, parent, entry);
+	if (account?.service === "discord") await renameDiscordThread({ account, threadId: entry.threadId, name: target.newName });
+
+	entry.name = target.newName;
+	entry.normalizedName = normalizedNewName;
+	upsertEntry(catalog, entry);
+	await writeCatalog(catalog);
+
+	const resolved = resolveConversation(config, entry.threadConversationId);
+	if (resolved) {
+		resolved.channel.name = target.newName;
+		await saveChatConfig(config);
+	}
+
+	return [
+		`Renamed pi-chat thread ${target.name} -> ${target.newName}.`,
+		``,
+		`  conversation: ${entry.threadConversationId}`,
+		`  thread id: ${entry.threadId}`,
+	].join("\n");
+}
+
+async function killThread(
+	target: { name?: string },
+	parent: ResolvedConversation | undefined,
+	currentThread: ThreadState | undefined,
+	options: { selfKill: boolean },
+): Promise<string> {
+	const catalog = await readCatalog();
+	const entry = resolveThreadEntry(catalog, target, parent, currentThread);
+	const config = await loadChatConfig();
+	const account = resolveAccountForEntry(config, parent, entry);
+
+	if (account?.service === "discord") {
+		await sendDiscordChannelMessage({
+			account,
+			channelId: entry.threadId,
+			content: `Killing pi-chat thread **${entry.name}**. This will stop the worker, delete local thread configuration, and close this Discord thread.`,
+		});
+		await closeDiscordThread({ account, threadId: entry.threadId });
+	}
+
+	const killed = killWorker(entry.threadConversationId);
+	const removedCatalog = removeEntry(catalog, entry.threadConversationId);
+	await writeCatalog(catalog);
+	const removedChatConfig = removeConversation(config, entry.threadConversationId);
+	if (removedChatConfig) await saveChatConfig(config);
+	const removedMounts = await removeMountsForConversation(entry.threadConversationId);
+
+	const lines = [
+		`Killed pi-chat thread ${entry.name}.`,
+		``,
+		`  conversation: ${entry.threadConversationId}`,
+		`  thread id: ${entry.threadId}`,
+		`  worker: ${killed ? "killed" : "was not running"}`,
+		`  catalog entry: ${removedCatalog ? "removed" : "not found"}`,
+		`  pi-chat config: ${removedChatConfig ? "removed" : "not found"}`,
+		`  mount config: ${removedMounts ? "removed" : "not found"}`,
+		`  Discord thread: closed`,
+	];
+	if (options.selfKill) lines.push("", "This worker is exiting now.");
 	return lines.join("\n");
 }
 
@@ -334,6 +464,23 @@ async function dispatch(raw: string, ctx: ExtensionContext): Promise<DispatchRes
 		const selfStop = !sub.name && !!currentThread;
 		const message = await stopThread({ name: sub.name }, parent, currentThread, { selfStop });
 		return { message, selfStopped: selfStop };
+	}
+
+	if (sub.verb === "kill") {
+		const config = await loadChatConfig();
+		const parentId = sub.parentConversationId ?? currentThread?.parentConversationId ?? connectedConversationId;
+		const parent = parentId ? resolveConversation(config, parentId) : undefined;
+		const selfKill = !sub.name && !!currentThread;
+		const message = await killThread({ name: sub.name }, parent, currentThread, { selfKill });
+		return { message, selfStopped: selfKill };
+	}
+
+	if (sub.verb === "rename") {
+		const config = await loadChatConfig();
+		const parentId = sub.parentConversationId ?? currentThread?.parentConversationId ?? connectedConversationId;
+		const parent = parentId ? resolveConversation(config, parentId) : undefined;
+		const message = await renameThread({ name: sub.name, newName: sub.newName }, parent, currentThread);
+		return { message, selfStopped: false };
 	}
 
 	// start | restart (with bare name → start)

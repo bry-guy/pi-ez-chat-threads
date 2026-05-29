@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-05-29
+
+### Added
+- `/chat-thread kill [name]` destructively removes a managed thread: closes the Discord thread, kills the tmux worker, removes the lifecycle catalog entry, removes the pi-chat managed conversation entry, and removes inherited mount config for the thread. Session files are left on disk.
+- `/chat-thread rename <target> <name>` renames a managed thread in Discord, the lifecycle catalog, and pi-chat conversation config.
+
+### Fixed
+- Thread creation now validates a usable persisted source session before creating the Discord thread, and rolls back local config / closes the Discord thread if worker setup fails after creation.
+- Remote transcript matching now prefers the latest matching command in a multi-line Discord transcript, avoiding stale `/chat-thread restart` replay loops.
+
 ## [0.5.0] - 2026-05-29
 
 ### Breaking

@@ -48,6 +48,14 @@ export async function writeMountsConfig(file: MountsFile, path = MOUNTS_CONFIG_P
 	await rename(tmp, path);
 }
 
+export async function removeMountsForConversation(conversationId: string, path = MOUNTS_CONFIG_PATH): Promise<boolean> {
+	const file = await readMountsConfig(path);
+	if (!file[conversationId]) return false;
+	delete file[conversationId];
+	await writeMountsConfig(file, path);
+	return true;
+}
+
 export async function inheritMounts(
 	parentConversationId: string,
 	threadConversationId: string,
