@@ -196,7 +196,6 @@ async function chatThreadCreateOrAttach(
 		threadName: created.name,
 		createdAt: new Date().toISOString(),
 	};
-	(ctx.sessionManager as unknown as { appendCustomEntry(type: string, data: unknown): void }).appendCustomEntry("pi-ez-chat-thread", state);
 	const forked = await forkSessionForThread({ sourceSessionFile, thread, threadState: state });
 	const start = startWorker({ conversationId: thread.conversationId, sessionFile: forked, cwd: ctx.cwd });
 

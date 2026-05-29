@@ -125,12 +125,21 @@ async function main() {
 		try { assertCanForkFromParent({ channel: { ...thread.channel, managedBy: "pi-ez-chat-threads" } }); } catch { managedRejected = true; }
 		check("managed-thread parent is rejected", managedRejected);
 
-		const entries: any[] = [
+		const parentEntries: any[] = [
 			{ type: "custom", customType: "pi-chat-state", data: { conversationId: "acct/main" } },
 			{ type: "custom", customType: "pi-ez-chat-thread", data: { parentConversationId: "acct/main", threadConversationId: thread.conversationId, threadId: "123", threadName: "t", createdAt: "now" } },
 		];
-		check("current pi-chat conversation found", getCurrentPiChatConversationId(entries) === "acct/main");
-		check("current thread state found", getCurrentThreadState(entries)?.threadConversationId === thread.conversationId);
+		check("current pi-chat conversation found", getCurrentPiChatConversationId(parentEntries) === "acct/main");
+		// Regression: stale pi-ez-chat-thread entries in a parent session must NOT be read
+		// as "we are inside a managed thread". The parent session's pi-chat-state points at the
+		// parent, not the thread, so the thread entry should be ignored here.
+		check("stale thread entry in parent session is ignored", getCurrentThreadState(parentEntries) === undefined);
+
+		const threadEntries: any[] = [
+			{ type: "custom", customType: "pi-chat-state", data: { conversationId: thread.conversationId } },
+			{ type: "custom", customType: "pi-ez-chat-thread", data: { parentConversationId: "acct/main", threadConversationId: thread.conversationId, threadId: "123", threadName: "t", createdAt: "now" } },
+		];
+		check("current thread state found when inside the thread", getCurrentThreadState(threadEntries)?.threadConversationId === thread.conversationId);
 
 		let requestedUrl = "";
 		const created = await createDiscordThread({

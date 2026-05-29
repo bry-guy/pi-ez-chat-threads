@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2026-05-29
+
+### Fixed
+- `/chat-thread <name>` from the parent channel no longer falsely reports "Already inside a managed thread." The previous version stamped the parent worker session with a `pi-ez-chat-thread` custom entry before forking, leaking thread state into the parent. The stamp is removed; the fork itself still carries the thread state, as before.
+- `getCurrentThreadState` now requires the session's current pi-chat conversation id to equal the thread's own conversation id, so any stale entries left over from 0.4.0 are ignored.
+
+### Docs
+- Added `docs/known-issues.md` documenting the upstream pi-chat `/new` reset bug (`sendUserMessage` bypassing `chat-new` command dispatch in `pi-coding-agent`).
+
 ## [0.4.0] - 2026-05-29
 
 ### Breaking

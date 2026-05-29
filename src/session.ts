@@ -52,12 +52,20 @@ export function getCurrentPiChatConversationId(entries: SessionEntry[]): string 
 	return undefined;
 }
 
+/**
+ * Returns the thread state only if the session's current pi-chat conversation id
+ * matches the thread's own conversation id. This prevents a stale `pi-ez-chat-thread`
+ * entry on a parent worker session (left over from earlier versions of this extension)
+ * from being misread as "we are inside a managed thread".
+ */
 export function getCurrentThreadState(entries: SessionEntry[]): ThreadState | undefined {
+	const currentConversationId = getCurrentPiChatConversationId(entries);
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry.type !== "custom" || entry.customType !== THREAD_STATE_TYPE) continue;
 		const data = entry.data as Partial<ThreadState> | undefined;
 		if (!data?.threadConversationId || !data.threadId || !data.threadName) continue;
+		if (currentConversationId && data.threadConversationId !== currentConversationId) continue;
 		return data as ThreadState;
 	}
 	return undefined;
