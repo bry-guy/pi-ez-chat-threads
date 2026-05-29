@@ -7,7 +7,7 @@ The idea is "main channel as switchboard": you mount projects (`pi-ez-chat-mount
 ## Mental model
 
 - Each Discord channel is one pi-chat conversation. The connected (`/chat-connect`) channel is what `/chat-mount`, `/chat-git`, etc. configure.
-- A thread is another pi-chat conversation, registered under a parent channel. It inherits the parent's mount set at the moment it is created, and forks the parent's pi session history. After that it lives independently.
+- A thread is another pi-chat conversation, registered under a parent channel. It inherits the parent's channel runtime config, mount set, and pi-ez-chat-git config at the moment it is created, and forks the parent's pi session history. After that it lives independently.
 - pi-chat owns sessions and VMs. This extension only adds lifecycle metadata, mount inheritance, and worker management on top of what pi-chat already does.
 
 ## Install
@@ -58,9 +58,10 @@ Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` /
 3. Creates a Discord thread named exactly what you passed.
 4. Registers the new thread as a pi-chat conversation in `~/.pi/agent/chat/config.json` with `managedBy: "pi-ez-chat-threads"`, `parentChannelId`, `parentConversationId`, while preserving the parent's channel-level pi-chat configuration fields.
 5. Copies the parent's `pi-ez-chat-mount` mount entries to the new conversation in `~/.pi/agent/chat-mount/mounts.json`. The thread mounts are frozen at this point; subsequent `/chat-mount` calls in the parent do not propagate to existing threads.
-6. Forks the current pi session into the thread's worker session directory and stamps it with `pi-chat-state` and `pi-ez-chat-thread` custom entries.
-7. Spawns the worker tmux for the new conversation id using the current process environment and forwarded pi runtime flags, replacing only the session/session-dir/conversation binding.
-8. Records the thread in `~/.pi/agent/chat-threads/threads.json` as our lifecycle catalog.
+6. Copies the parent's `pi-ez-chat-git` entry to the new conversation in `~/.pi/agent/chat-git/conversations.json`, so git identity/SSH-agent wiring applies in the thread VM after startup.
+7. Forks the current pi session into the thread's worker session directory and stamps it with `pi-chat-state` and `pi-ez-chat-thread` custom entries.
+8. Spawns the worker tmux for the new conversation id using the current process environment and forwarded pi runtime flags, replacing only the session/session-dir/conversation binding.
+9. Records the thread in `~/.pi/agent/chat-threads/threads.json` as our lifecycle catalog.
 
 ## What `start <name>` / `restart <name>` does for an existing thread
 
@@ -90,6 +91,7 @@ Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` /
 - Removes the thread from `~/.pi/agent/chat-threads/threads.json`.
 - Removes the managed thread conversation from `~/.pi/agent/chat/config.json`.
 - Removes inherited mount config for the thread from `~/.pi/agent/chat-mount/mounts.json`.
+- Removes inherited git config for the thread from `~/.pi/agent/chat-git/conversations.json`.
 - Leaves historical session files on disk.
 
 ## Why no `/chat-reload`
@@ -101,6 +103,7 @@ pi-chat parses `/new` before extension input hooks fire, so no extension can int
 ```text
 ~/.pi/agent/chat/                 # pi-chat conversations, sessions, tmux workers (owned by pi-chat)
 ~/.pi/agent/chat-mount/mounts.json # parent and thread mount entries (owned by pi-ez-chat-mount)
+~/.pi/agent/chat-git/conversations.json # parent and thread git/SSH config (owned by pi-ez-chat-git)
 ~/.pi/agent/chat-threads/threads.json # lifecycle catalog for managed threads (owned by this package)
 ```
 

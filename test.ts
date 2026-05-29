@@ -6,6 +6,7 @@ import extension, { assertCanForkFromParent, canPrompt, parseSubcommand } from "
 import { addThreadConversation, listDiscordParentConversations, removeConversation, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
 import { findByName, listForParent, normalizeThreadName, readCatalog, removeEntry, upsertEntry, writeCatalog, type ThreadCatalogEntry } from "./src/catalog.js";
 import { closeDiscordThread, createDiscordThread, renameDiscordThread } from "./src/discord.js";
+import { inheritChatGitConfig, readChatGitStore, removeChatGitConfig, writeChatGitStore } from "./src/git.js";
 import { inheritMounts, readMountsConfig, removeMountsForConversation, writeMountsConfig } from "./src/mounts.js";
 import { matchSlashCommand, normalizeRemoteCommandText, stripLeadingMention } from "./src/match.js";
 import {
@@ -157,6 +158,16 @@ async function main() {
 		mounts = await readMountsConfig(mountsPath);
 		check("mount remove keeps parent entry", !!mounts[parent.conversationId] && !mounts[thread.conversationId]);
 
+		// chat-git inheritance
+		const gitPath = join(work, "chat-git", "conversations.json");
+		await writeChatGitStore({ [parent.conversationId]: { enabled: true, ssh: { enabled: true } } }, gitPath);
+		check("chat-git inheritance reports copied", await inheritChatGitConfig(parent.conversationId, thread.conversationId, gitPath));
+		let gitStore = await readChatGitStore(gitPath);
+		check("chat-git inheritance writes thread entry", gitStore[thread.conversationId]?.enabled === true);
+		check("chat-git remove deletes thread entry", await removeChatGitConfig(thread.conversationId, gitPath));
+		gitStore = await readChatGitStore(gitPath);
+		check("chat-git remove keeps parent entry", !!gitStore[parent.conversationId] && !gitStore[thread.conversationId]);
+
 		let managedRejected = false;
 		try { assertCanForkFromParent({ channel: { ...thread.channel, managedBy: "pi-ez-chat-threads" } }); } catch { managedRejected = true; }
 		check("managed-thread parent is rejected", managedRejected);
@@ -237,8 +248,8 @@ async function main() {
 		check("worker arg forwarding keeps runtime args", forwarded.join(" ") === "--image custom -e /pkg", forwarded.join(" "));
 		const cmd = buildWorkerCommand("/tmp/sess.jsonl", "/tmp/sdir", "acct/thread", ["node", "pi", "--image", "custom", "--session", "old.jsonl", "-e", "/pkg"]);
 		check("worker command passes chat conversation", cmd.includes("--chat-conversation 'acct/thread'"), cmd);
-		check("worker command carries explicit extension", cmd.includes("-e '/pkg'"), cmd);
-		check("worker command carries image-like runtime args", cmd.includes("--image 'custom'"), cmd);
+		check("worker command carries explicit extension", cmd.includes("'-e' '/pkg'"), cmd);
+		check("worker command carries image-like runtime args", cmd.includes("'--image' 'custom'"), cmd);
 		check("worker command replaces old session", !cmd.includes("old.jsonl"), cmd);
 
 		// startWorker behavior (mocked tmux)

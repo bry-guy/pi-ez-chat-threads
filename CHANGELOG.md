@@ -11,6 +11,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Thread creation now validates a usable persisted source session before creating the Discord thread, and rolls back local config / closes the Discord thread if worker setup fails after creation.
 - Remote transcript matching now prefers the latest matching command in a multi-line Discord transcript, avoiding stale `/chat-thread restart` replay loops.
+- Thread workers now preserve parent channel runtime config fields and forward pi runtime args/environment so custom Gondolin image settings carry into new thread workers.
+- Thread creation now inherits parent `pi-ez-chat-git` config so `/gondolin-git` and SSH-agent git auth are available in new thread VMs when enabled in the parent.
 
 ## [0.5.0] - 2026-05-29
 

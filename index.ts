@@ -22,6 +22,7 @@ import {
 	type ThreadCatalogEntry,
 } from "./src/catalog.js";
 import { closeDiscordThread, createDiscordThread, renameDiscordThread, sendDiscordChannelMessage, sendDiscordThreadIntro } from "./src/discord.js";
+import { inheritChatGitConfig, removeChatGitConfig } from "./src/git.js";
 import { inheritMounts, removeMountsForConversation } from "./src/mounts.js";
 import { matchSlashCommand } from "./src/match.js";
 import {
@@ -162,6 +163,7 @@ async function createFreshThread(
 	const createdAt = new Date().toISOString();
 	let thread: ResolvedConversation | undefined;
 	let mountInheritance: Awaited<ReturnType<typeof inheritMounts>> | undefined;
+	let inheritedGit = false;
 	let forked = "";
 	let start: ReturnType<typeof startWorker> | undefined;
 	try {
@@ -174,6 +176,7 @@ async function createFreshThread(
 		});
 		await saveChatConfig(config);
 		mountInheritance = await inheritMounts(parent.conversationId, thread.conversationId);
+		inheritedGit = await inheritChatGitConfig(parent.conversationId, thread.conversationId);
 
 		const state: ThreadState = {
 			parentConversationId: parent.conversationId,
@@ -189,6 +192,7 @@ async function createFreshThread(
 			removeConversation(config, thread.conversationId);
 			await saveChatConfig(config).catch(() => undefined);
 			await removeMountsForConversation(thread.conversationId).catch(() => undefined);
+			await removeChatGitConfig(thread.conversationId).catch(() => undefined);
 		}
 		await closeDiscordThread({ account: parent.account, threadId: created.id }).catch(() => undefined);
 		throw error;
@@ -224,6 +228,7 @@ async function createFreshThread(
 		`  conversation: ${thread.conversationId}`,
 		`  thread id: ${created.id}`,
 		`  inherited mounts: ${mountInheritance.inherited.length > 0 ? mountInheritance.inherited.join(", ") : "none (run /chat-mount in the parent channel before starting a thread if you want host repos available)"}`,
+		`  inherited git config: ${inheritedGit ? "yes" : "no"}`,
 		`  source session: ${sourceSessionFile}`,
 		`  forked session: ${forked}`,
 		`  worker: ${start.action} (${start.tmuxName})`,
@@ -420,6 +425,7 @@ async function killThread(
 	const removedChatConfig = removeConversation(config, entry.threadConversationId);
 	if (removedChatConfig) await saveChatConfig(config);
 	const removedMounts = await removeMountsForConversation(entry.threadConversationId);
+	const removedGit = await removeChatGitConfig(entry.threadConversationId);
 
 	const lines = [
 		`Killed pi-chat thread ${entry.name}.`,
@@ -430,6 +436,7 @@ async function killThread(
 		`  catalog entry: ${removedCatalog ? "removed" : "not found"}`,
 		`  pi-chat config: ${removedChatConfig ? "removed" : "not found"}`,
 		`  mount config: ${removedMounts ? "removed" : "not found"}`,
+		`  git config: ${removedGit ? "removed" : "not found"}`,
 		`  Discord thread: closed`,
 	];
 	if (options.selfKill) lines.push("", "This worker is exiting now.");
