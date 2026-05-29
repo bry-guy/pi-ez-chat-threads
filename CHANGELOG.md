@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-05-29
+
+### Breaking
+- `/chat-thread` requires an explicit `<name>`. Auto-naming from session/session-id is removed.
+- `/chat-thread` no longer accepts `--new`, `--restart`, or `--no-spawn`. Restart of a dead worker is implicit when attaching by name.
+- Remote `/chat-thread` is always non-interactive; no picker prompts can be issued from worker contexts.
+
+### Added
+- `/chat-thread <name>` create-or-attach by name under the connected parent channel. Restarts a dead worker against the existing session file when attaching.
+- `/chat-thread end` (from inside a thread) and `/chat-thread end <name>` (from the parent) kill the worker and mark the thread `ended` while preserving the session file, the Discord thread, and the pi-chat conversation entry.
+- `/chat-thread list` shows managed threads for the connected channel with worker status.
+- `/chat-thread <name> --reactivate` re-activates an ended thread.
+- Lifecycle catalog at `~/.pi/agent/chat-threads/threads.json` tracks managed threads, last session file, and ended-at timestamps.
+
+### Changed
+- Worker spawn logic moved out of session handling into `src/worker.ts` so attach can restart without re-forking.
+
 ## [0.3.0] - 2026-05-25
 
 ### Breaking
