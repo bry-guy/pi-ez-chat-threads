@@ -4,8 +4,6 @@ import { dirname, join } from "node:path";
 
 export const THREADS_CATALOG_PATH = join(homedir(), ".pi", "agent", "chat-threads", "threads.json");
 
-export type ThreadStatus = "active" | "ended";
-
 export interface ThreadCatalogEntry {
 	parentConversationId: string;
 	threadConversationId: string;
@@ -13,7 +11,7 @@ export interface ThreadCatalogEntry {
 	name: string;
 	normalizedName: string;
 	createdAt: string;
-	endedAt: string | null;
+	stoppedAt: string | null;
 	ownerSessionId: string;
 	lastSessionFile?: string;
 }
@@ -37,7 +35,24 @@ export async function readCatalog(path = THREADS_CATALOG_PATH): Promise<ThreadCa
 	try {
 		const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<ThreadCatalog>;
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return emptyCatalog();
-		return { version: 1, threads: (parsed.threads as Record<string, ThreadCatalogEntry>) ?? {} };
+		const rawThreads = (parsed.threads as unknown as Record<string, Record<string, unknown>>) ?? {};
+		const threads: Record<string, ThreadCatalogEntry> = {};
+		for (const [k, raw] of Object.entries(rawThreads)) {
+			// Migrate legacy `endedAt` field to `stoppedAt`.
+			const stoppedAt = (raw.stoppedAt ?? raw.endedAt ?? null) as string | null;
+			threads[k] = {
+				parentConversationId: String(raw.parentConversationId ?? ""),
+				threadConversationId: String(raw.threadConversationId ?? ""),
+				threadId: String(raw.threadId ?? ""),
+				name: String(raw.name ?? ""),
+				normalizedName: String(raw.normalizedName ?? ""),
+				createdAt: String(raw.createdAt ?? ""),
+				stoppedAt,
+				ownerSessionId: String(raw.ownerSessionId ?? ""),
+				lastSessionFile: raw.lastSessionFile != null ? String(raw.lastSessionFile) : undefined,
+			};
+		}
+		return { version: 1, threads };
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code === "ENOENT") return emptyCatalog();
 		throw err;

@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-05-29
+
+### Breaking
+- Replaced `end` / `--reactivate` with `start` / `stop` / `restart`. The verbs are uniform across pi sessions and Discord; the same syntax (`/chat-thread {start|stop|restart|list} [name]`) works in both places, with a bare `/chat-thread <name>` shorthand for `start <name>`.
+- Catalog field `endedAt` renamed to `stoppedAt`. Existing 0.4.x catalog files are migrated automatically on read.
+- `start <name>` on a stopped thread now restarts it directly; no opt-in flag.
+
+### Added
+- `/chat-thread restart [name]` force-restarts a thread (kills tmux, respawns against the existing session file).
+- Lifecycle notices (`Starting`/`Stopping`/`Restarting pi-chat thread <name>.`) posted directly to the Discord thread by the bot so the user sees the action take effect even when the worker is about to die (self-stop / self-restart).
+- Self-stop and self-restart from inside a thread return `action: "handled"` so the LLM does not preface an undeliverable reply.
+
+### Removed
+- `/chat-thread end` and `--reactivate` no longer exist.
+
 ## [0.4.2] - 2026-05-29
 
 ### Fixed

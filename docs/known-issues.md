@@ -67,19 +67,18 @@ Mounts do not propagate to existing threads after creation. By design: a thread'
 
 If a thread was created with `pi-ez-chat-threads` < 0.4.2, its forked session may have recorded the (then-nonexistent) channel workspace dir as `cwd`. The worker then blocks at pi's interactive "cwd from session file does not exist" prompt at startup, never starts the Discord listener, and never replies in the thread.
 
-0.4.2 fixes new threads. For existing stuck threads:
-
-```bash
-tmux kill-session -t pi-chat-worker-<conversation-id-with-/->
-```
-
-then from the parent channel:
+0.4.2 fixes new threads. For existing stuck threads, from the parent channel:
 
 ```text
-@bot /chat-thread <name>
+@bot /chat-thread restart <name>
 ```
 
-The attach path will rebuild the worker against the existing session file. If the original session file still records the bad cwd, end the thread (`/chat-thread end <name>` from the parent) and create it again with a fresh name (or `--reactivate` once you have manually re-forked).
+`restart` kills the wedged tmux worker and respawns against the recorded session file. If the original session file still records the bad cwd, stop the thread and start a new one with a different name:
+
+```text
+@bot /chat-thread stop <name>
+@bot /chat-thread <new-name>
+```
 
 ## 4. Reload still relies on `@bot /new`
 

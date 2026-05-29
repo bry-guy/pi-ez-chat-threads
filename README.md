@@ -27,28 +27,28 @@ This package builds on `pi-chat`; configure Discord there first via `/chat-confi
 
 ## Commands
 
-- `/chat-thread <name>` — Create or attach a thread named `<name>` in the connected channel. If it already exists and its worker is dead, the worker is restarted on the existing session file. Names are matched case-insensitively after normalization.
-- `/chat-thread end` — End the current thread (run from inside the thread). Kills the worker, marks the thread `ended` in the local catalog, keeps the session file and Discord thread.
-- `/chat-thread end <name>` — End a named thread from the parent channel.
-- `/chat-thread list` — List managed threads for the connected channel and show worker status.
-- `/chat-thread <name> --reactivate` — Reuse the name of an ended thread.
-- `--parent=<account/channel>` — Specify a parent explicitly when no pi-chat context is connected.
+All commands work the same from a pi session and from Discord (`@bot /chat-thread ...`). The first word is the verb; a bare name is shorthand for `start <name>`.
 
-Names are required. There is no automatic naming from the current pi session, because Discord users have no visibility into pi session names; explicit names are how you and the agent agree on identity.
+- `/chat-thread <name>` — Shorthand for `start <name>`.
+- `/chat-thread start <name>` — Start a new thread, or attach to an existing one. If the worker is already running, this just announces and returns. If it was previously stopped, the worker is force-restarted against the existing session file.
+- `/chat-thread stop` (inside a thread) — Stop the current thread's worker. Posts a notice to Discord first, then kills the tmux worker.
+- `/chat-thread stop <name>` (from the parent channel) — Stop a named thread.
+- `/chat-thread restart <name>` — Force-restart a thread by name (from anywhere).
+- `/chat-thread restart` (inside a thread) — Force-restart the current thread. The worker exits and is respawned; the response message is posted directly to Discord, not via the agent.
+- `/chat-thread list` — List managed threads for the connected channel and show worker status.
+- `--parent=<account/channel>` — Specify a parent channel explicitly when no pi-chat context is connected.
+
+Names are required for `start`. There is no automatic naming from the current pi session; explicit names are how you and the agent agree on identity, especially from Discord where pi session names are invisible.
+
+Lifecycle is `start → stop → (re)start`. There is no `end` and no `--reactivate`; `start <name>` on a stopped thread restarts it. The catalog records `stoppedAt` rather than `endedAt`; the Discord thread and session file are always preserved.
 
 ## Use from Discord
 
-When this package is loaded in the pi-chat worker, Discord users can send the same commands:
-
-```text
-@bot /chat-thread Fix login tests
-@bot /chat-thread list
-@bot /chat-thread end
-```
-
 Mentions before or after the command work, and transcript-shaped forwarded lines like `- [time] [uid:...] user: <@bot> /chat-thread ...` are also recognized. Remote `/chat-thread` is always non-interactive — no picker prompts are issued from worker contexts.
 
-## What "create" does
+Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` / `Restarting pi-chat thread X.`) are posted directly to the thread's Discord channel by the bot. For self-stop and self-restart this is necessary because the worker dies before any agent reply could be delivered.
+
+## What `start <name>` does for a new thread
 
 1. Resolves the parent channel from the connected pi-chat conversation (or `--parent=...`).
 2. Refuses to create from inside an existing managed thread (run from the parent channel).
@@ -59,20 +59,18 @@ Mentions before or after the command work, and transcript-shaped forwarded lines
 7. Spawns the worker tmux for the new conversation id.
 8. Records the thread in `~/.pi/agent/chat-threads/threads.json` as our lifecycle catalog.
 
-## What "attach" does
+## What `start <name>` / `restart <name>` does for an existing thread
 
-When `/chat-thread <name>` matches an existing thread under the parent:
+- If the worker tmux is alive (and verb is `start`), it announces and returns without re-spawning.
+- If the worker tmux is dead, or the verb is `restart`, the worker is killed (if alive) and respawned against the last recorded session file. The Discord thread, channel registration, and mounts are not touched.
+- `stoppedAt` is cleared on successful (re)start.
 
-- If the catalog says it's `ended`, you must pass `--reactivate`.
-- If the worker tmux is alive, it is reported as already running. No fork, no session change.
-- If the worker tmux is dead, the worker is restarted against the last recorded session file. The Discord thread, channel registration, and mounts are not touched.
+## What `stop` does
 
-## What "end" does
-
-- Kills the thread's worker tmux if running.
-- Sets `endedAt` in the catalog.
-- Leaves the Discord thread, the pi-chat conversation entry, and the session file in place. v1 intentionally does not archive the Discord thread.
-- Reactivate later with `/chat-thread <name> --reactivate` from the parent channel.
+- Posts `Stopping pi-chat thread <name>.` to the Discord thread.
+- Kills the worker tmux.
+- Sets `stoppedAt` in the catalog.
+- Leaves the Discord thread, the pi-chat conversation entry, and the session file in place.
 
 ## Why no `/chat-reload`
 

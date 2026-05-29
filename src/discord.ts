@@ -34,17 +34,36 @@ export async function createDiscordThread(params: {
 	return { id: data.id, name: data.name ?? params.name };
 }
 
+/**
+ * Post a message into a Discord channel/thread directly via the bot. Used for lifecycle
+ * notices that need to land before the worker dies (self-stop) or before the worker exists
+ * (start intro). Best-effort; failures are swallowed.
+ */
+export async function sendDiscordChannelMessage(params: {
+	account: ChatAccountConfig;
+	channelId: string;
+	content: string;
+	fetchImpl?: typeof fetch;
+}): Promise<void> {
+	if (!params.account.botToken) return;
+	const fetcher = params.fetchImpl ?? fetch;
+	await fetcher(`https://discord.com/api/v10/channels/${params.channelId}/messages`, {
+		method: "POST",
+		headers: { Authorization: `Bot ${params.account.botToken}`, "content-type": "application/json" },
+		body: JSON.stringify({ content: params.content }),
+	}).catch(() => undefined);
+}
+
 export async function sendDiscordThreadIntro(params: {
 	account: ChatAccountConfig;
 	threadId: string;
 	content: string;
 	fetchImpl?: typeof fetch;
 }): Promise<void> {
-	if (!params.account.botToken) return;
-	const fetcher = params.fetchImpl ?? fetch;
-	await fetcher(`https://discord.com/api/v10/channels/${params.threadId}/messages`, {
-		method: "POST",
-		headers: { Authorization: `Bot ${params.account.botToken}`, "content-type": "application/json" },
-		body: JSON.stringify({ content: params.content }),
-	}).catch(() => undefined);
+	return sendDiscordChannelMessage({
+		account: params.account,
+		channelId: params.threadId,
+		content: params.content,
+		fetchImpl: params.fetchImpl,
+	});
 }

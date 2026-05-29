@@ -63,14 +63,17 @@ async function main() {
 		check("remote chat-thread forces non-interactive mode", !canPrompt({ hasUI: true } as any, true));
 
 		// Subcommand parser
-		check("parser rejects empty input", parseSubcommand("").kind === "help");
-		check("parser treats bare name as create", parseSubcommand("Fix login").kind === "create");
-		check("parser captures create name", parseSubcommand("Fix login").name === "Fix login");
-		check("parser supports end", parseSubcommand("end").kind === "end" && parseSubcommand("end").name === undefined);
-		check("parser supports end <name>", (() => { const s = parseSubcommand("end Fix login"); return s.kind === "end" && s.name === "Fix login"; })());
-		check("parser supports list alias", parseSubcommand("ls").kind === "list");
-		check("parser supports --reactivate", (() => { const s = parseSubcommand("Fix login --reactivate"); return s.kind === "create" && s.reactivate === true; })());
-		check("parser supports --parent", (() => { const s = parseSubcommand("Fix login --parent=acct/main"); return s.kind === "create" && s.parentConversationId === "acct/main"; })());
+		check("parser rejects empty input", parseSubcommand("").verb === "help");
+		check("parser treats bare name as start shorthand", parseSubcommand("Fix login").verb === "start");
+		check("parser captures start name from shorthand", parseSubcommand("Fix login").name === "Fix login");
+		check("parser supports start <name>", (() => { const s = parseSubcommand("start Fix login"); return s.verb === "start" && s.name === "Fix login"; })());
+		check("parser supports stop", parseSubcommand("stop").verb === "stop" && parseSubcommand("stop").name === undefined);
+		check("parser supports stop <name>", (() => { const s = parseSubcommand("stop Fix login"); return s.verb === "stop" && s.name === "Fix login"; })());
+		check("parser supports restart <name>", (() => { const s = parseSubcommand("restart Fix login"); return s.verb === "restart" && s.name === "Fix login"; })());
+		check("parser supports restart with no name", parseSubcommand("restart").verb === "restart");
+		check("parser supports list alias", parseSubcommand("ls").verb === "list");
+		check("parser supports --parent on bare-name shorthand", (() => { const s = parseSubcommand("Fix login --parent=acct/main"); return s.verb === "start" && s.parentConversationId === "acct/main"; })());
+		check("parser supports --parent on explicit verb", (() => { const s = parseSubcommand("start Fix login --parent=acct/main"); return s.verb === "start" && s.parentConversationId === "acct/main"; })());
 
 		// Name normalization
 		check("normalizeThreadName collapses spaces and case", normalizeThreadName("  Fix Login Tests!! ") === "fix-login-tests");
@@ -98,7 +101,7 @@ async function main() {
 			name: "Feature Idea",
 			normalizedName: normalizeThreadName("Feature Idea"),
 			createdAt: "2026-01-01T00:00:00.000Z",
-			endedAt: null,
+			stoppedAt: null,
 			ownerSessionId: "sess1",
 			lastSessionFile: "/tmp/x.jsonl",
 		};
@@ -107,6 +110,27 @@ async function main() {
 		check("catalog upsert+read", readBack.threads[thread.conversationId]?.normalizedName === "feature-idea");
 		check("catalog findByName works", findByName(readBack, parent.conversationId, "feature-idea")?.threadConversationId === thread.conversationId);
 		check("catalog listForParent works", listForParent(readBack, parent.conversationId).length === 1);
+
+		// Legacy catalog migration: endedAt -> stoppedAt
+		const legacyCatalogPath = join(work, "legacy-catalog.json");
+		await writeFile(legacyCatalogPath, JSON.stringify({
+			version: 1,
+			threads: {
+				[thread.conversationId]: {
+					parentConversationId: parent.conversationId,
+					threadConversationId: thread.conversationId,
+					threadId: "1234567890",
+					name: "Old",
+					normalizedName: "old",
+					createdAt: "2026-01-01T00:00:00.000Z",
+					endedAt: "2026-01-02T00:00:00.000Z",
+					ownerSessionId: "sess1",
+					lastSessionFile: "/tmp/x.jsonl",
+				},
+			},
+		}), "utf8");
+		const migrated = await readCatalog(legacyCatalogPath);
+		check("legacy endedAt migrates to stoppedAt", migrated.threads[thread.conversationId]?.stoppedAt === "2026-01-02T00:00:00.000Z");
 
 		// Mount inheritance
 		const mountsPath = join(work, "chat-mount", "mounts.json");
