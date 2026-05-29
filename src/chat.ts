@@ -173,10 +173,9 @@ export function addThreadConversation(params: {
 	} else {
 		channelKey = makeChannelKey(params.threadName, params.threadId, account.channels);
 		account.channels[channelKey] = {
+			...params.parent.channel,
 			id: params.threadId,
 			name: params.threadName,
-			access: params.parent.channel.access,
-			gondolin: params.parent.channel.gondolin,
 			parentChannelId: params.parent.channel.id,
 			parentConversationId: params.parent.conversationId,
 			managedBy: "pi-ez-chat-threads",

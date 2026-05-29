@@ -100,6 +100,8 @@ What the user wants: "the whole VM including mounts is copied over to the thread
 Reality:
 
 - VMs are not "copied". Each conversation is its own VM created by Gondolin at `VM.create` time using config for that conversation id.
+- Thread conversations start from the parent channel's pi-chat config, then override only thread identity/metadata fields.
+- Thread workers inherit the spawning pi process environment and forward pi runtime flags, replacing only session/session-dir/conversation binding, so mise-provided image config and similar runtime settings follow the thread without depending on specific companion extensions.
 - Mounts are configured at the host (`~/.pi/agent/chat-mount/mounts.json`) and applied at VM start.
 - We already implement mount inheritance: on thread create we copy the parent's `<conversationId>` mount entries to the new thread's `<conversationId>` in the mounts file. We will continue to do that.
 - Open question: should subsequent `/chat-mount` calls in the parent propagate to active children? Default no, because that surprises the thread. Optional: `/chat-mount --propagate` later. v1 keeps thread mounts frozen at fork time.

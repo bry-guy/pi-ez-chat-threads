@@ -15,7 +15,7 @@ import {
 	getCurrentThreadState,
 	type ThreadState,
 } from "./src/session.js";
-import { buildWorkerCommand, startWorker } from "./src/worker.js";
+import { buildWorkerCommand, forwardedPiArgs, startWorker } from "./src/worker.js";
 
 interface TR { name: string; ok: boolean; details?: string }
 const results: TR[] = [];
@@ -84,10 +84,14 @@ async function main() {
 		check("normalizeThreadName empty for symbols-only", normalizeThreadName("!!!") === "");
 
 		const parent = fakeConversation(work, "main", "parent-channel-id");
+		(parent.channel as any).gondolin = { image: "custom-image" };
+		(parent.channel as any).customFutureField = { enabled: true };
 		const config: ChatConfig = { accounts: { acct: { ...parent.account, channels: { main: parent.channel } } } };
 		const thread = addThreadConversation({ config, parent, threadId: "1234567890", threadName: "feature idea", sessionId: "sess1" });
 		check("thread conversation is added", !!config.accounts.acct.channels[thread.channelKey]);
 		check("thread keeps parent channel id", thread.channel.parentChannelId === "parent-channel-id");
+		check("thread inherits parent gondolin config", (thread.channel.gondolin as any)?.image === "custom-image");
+		check("thread preserves unknown parent channel fields", (thread.channel as any).customFutureField?.enabled === true);
 		const parents = listDiscordParentConversations(config);
 		check("parent picker includes normal Discord channel", parents.some((c) => c.conversationId === parent.conversationId));
 		check("parent picker excludes managed threads", !parents.some((c) => c.conversationId === thread.conversationId));
@@ -229,22 +233,28 @@ async function main() {
 		check("worker session finder returns most recent", recentWorker === forked, recentWorker);
 
 		// Worker command shape
-		const cmd = buildWorkerCommand("/tmp/sess.jsonl", "/tmp/sdir", "acct/thread", ["node", "pi", "-e", "/pkg"]);
+		const forwarded = forwardedPiArgs(["node", "pi", "--image", "custom", "--session", "old.jsonl", "--session-dir=/old", "--chat-conversation", "acct/main", "-e", "/pkg"]);
+		check("worker arg forwarding keeps runtime args", forwarded.join(" ") === "--image custom -e /pkg", forwarded.join(" "));
+		const cmd = buildWorkerCommand("/tmp/sess.jsonl", "/tmp/sdir", "acct/thread", ["node", "pi", "--image", "custom", "--session", "old.jsonl", "-e", "/pkg"]);
 		check("worker command passes chat conversation", cmd.includes("--chat-conversation 'acct/thread'"), cmd);
 		check("worker command carries explicit extension", cmd.includes("-e '/pkg'"), cmd);
+		check("worker command carries image-like runtime args", cmd.includes("--image 'custom'"), cmd);
+		check("worker command replaces old session", !cmd.includes("old.jsonl"), cmd);
 
 		// startWorker behavior (mocked tmux)
 		let tmuxCalls: any[] = [];
 		let alive = false;
-		const fakeSpawn = ((command: string, args: readonly string[]) => {
-			tmuxCalls.push([command, [...args]]);
+		const fakeSpawn = ((command: string, args: readonly string[], options?: any) => {
+			tmuxCalls.push([command, [...args], options]);
 			if (args[0] === "has-session") return { status: alive ? 0 : 1 } as any;
 			if (args[0] === "new-session") { alive = true; return { status: 0 } as any; }
 			if (args[0] === "kill-session") { alive = false; return { status: 0 } as any; }
 			return { status: 0 } as any;
 		}) as any;
-		const first = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn });
+		const first = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn, env: { GONDOLIN_IMAGE: "custom" } });
 		check("first startWorker starts tmux", first.action === "started" && tmuxCalls.some((c) => c[1][0] === "new-session"));
+		check("startWorker passes env to tmux client", tmuxCalls.some((c) => c[2]?.env?.GONDOLIN_IMAGE === "custom"));
+		check("startWorker seeds tmux session environment", tmuxCalls.some((c) => c[1].includes("GONDOLIN_IMAGE=custom")));
 		tmuxCalls = [];
 		const second = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn });
 		check("second startWorker reports already-running", second.action === "already-running" && !tmuxCalls.some((c) => c[1][0] === "new-session"));

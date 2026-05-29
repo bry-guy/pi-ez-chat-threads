@@ -2,8 +2,14 @@ import { spawnSync } from "node:child_process";
 
 import { tmuxSafeName } from "./chat.js";
 
+export interface WorkerSpawnOptions {
+	stdio?: unknown;
+	encoding?: BufferEncoding;
+	env?: NodeJS.ProcessEnv;
+}
+
 export interface WorkerSpawn {
-	(command: string, args: readonly string[], options?: { stdio?: unknown; encoding?: BufferEncoding }): {
+	(command: string, args: readonly string[], options?: WorkerSpawnOptions): {
 		status: number | null;
 		stderr?: string | Buffer;
 		error?: Error;
@@ -30,24 +36,32 @@ function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function explicitExtensionCommandParts(argv: readonly string[]): string[] {
-	const parts: string[] = [];
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i];
-		if ((arg === "-e" || arg === "--extension") && argv[i + 1]) parts.push(arg, shellQuote(argv[++i]));
-		else if (arg.startsWith("--extension=")) parts.push("--extension", shellQuote(arg.slice("--extension=".length)));
+const REPLACED_VALUE_FLAGS = new Set(["--session", "--session-dir", "--chat-conversation"]);
+const REPLACED_PREFIX_FLAGS = ["--session=", "--session-dir=", "--chat-conversation="];
+
+export function forwardedPiArgs(argv: readonly string[] = process.argv): string[] {
+	const raw = argv.slice(2);
+	const out: string[] = [];
+	for (let i = 0; i < raw.length; i++) {
+		const arg = raw[i];
+		if (REPLACED_VALUE_FLAGS.has(arg)) {
+			i++;
+			continue;
+		}
+		if (REPLACED_PREFIX_FLAGS.some((prefix) => arg.startsWith(prefix))) continue;
+		out.push(arg);
 	}
-	return parts;
+	return out;
 }
 
 export function buildWorkerCommand(sessionFile: string, sessionDir: string, conversationId: string, argv: readonly string[] = process.argv): string {
 	return [
 		"exec pi",
+		...forwardedPiArgs(argv).map(shellQuote),
 		"--session",
 		shellQuote(sessionFile),
 		"--session-dir",
 		shellQuote(sessionDir),
-		...explicitExtensionCommandParts(argv),
 		"--chat-conversation",
 		shellQuote(conversationId),
 	].join(" ");
@@ -59,11 +73,18 @@ export interface WorkerStartParams {
 	cwd: string;
 	restart?: boolean;
 	spawn?: WorkerSpawn;
+	env?: NodeJS.ProcessEnv;
 }
 
 export interface WorkerStartResult {
 	action: "already-running" | "started" | "restarted";
 	tmuxName: string;
+}
+
+function tmuxEnvironmentArgs(env: NodeJS.ProcessEnv): string[] {
+	return Object.entries(env)
+		.filter((entry): entry is [string, string] => typeof entry[1] === "string")
+		.flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 }
 
 export function startWorker(params: WorkerStartParams): WorkerStartResult {
@@ -74,7 +95,8 @@ export function startWorker(params: WorkerStartParams): WorkerStartResult {
 	if (alive && params.restart) spawn("tmux", ["kill-session", "-t", tmuxName], { stdio: "ignore" });
 	const sessionDir = params.sessionFile.replace(/\/[^/]+$/, "");
 	const command = buildWorkerCommand(params.sessionFile, sessionDir, params.conversationId);
-	const result = spawn("tmux", ["new-session", "-d", "-s", tmuxName, "-c", params.cwd, command], { encoding: "utf8" });
+	const env = { ...process.env, ...(params.env ?? {}) };
+	const result = spawn("tmux", ["new-session", "-d", ...tmuxEnvironmentArgs(env), "-s", tmuxName, "-c", params.cwd, command], { encoding: "utf8", env });
 	if (result.error || result.status !== 0) {
 		const stderr = typeof result.stderr === "string" ? result.stderr : result.stderr?.toString() ?? "";
 		throw new Error(stderr.trim() || result.error?.message || "tmux failed");

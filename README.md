@@ -56,10 +56,10 @@ Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` /
 1. Resolves the parent channel from the connected pi-chat conversation (or `--parent=...`).
 2. Refuses to create from inside an existing managed thread (run from the parent channel).
 3. Creates a Discord thread named exactly what you passed.
-4. Registers the new thread as a pi-chat conversation in `~/.pi/agent/chat/config.json` with `managedBy: "pi-ez-chat-threads"`, `parentChannelId`, `parentConversationId`.
+4. Registers the new thread as a pi-chat conversation in `~/.pi/agent/chat/config.json` with `managedBy: "pi-ez-chat-threads"`, `parentChannelId`, `parentConversationId`, while preserving the parent's channel-level pi-chat configuration fields.
 5. Copies the parent's `pi-ez-chat-mount` mount entries to the new conversation in `~/.pi/agent/chat-mount/mounts.json`. The thread mounts are frozen at this point; subsequent `/chat-mount` calls in the parent do not propagate to existing threads.
 6. Forks the current pi session into the thread's worker session directory and stamps it with `pi-chat-state` and `pi-ez-chat-thread` custom entries.
-7. Spawns the worker tmux for the new conversation id.
+7. Spawns the worker tmux for the new conversation id using the current process environment and forwarded pi runtime flags, replacing only the session/session-dir/conversation binding.
 8. Records the thread in `~/.pi/agent/chat-threads/threads.json` as our lifecycle catalog.
 
 ## What `start <name>` / `restart <name>` does for an existing thread
