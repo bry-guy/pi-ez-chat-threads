@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2] - 2026-05-29
+
+### Fixed
+- New threads no longer wedge on pi's interactive `cwd from session file does not exist` prompt at worker startup. The forked session now records the parent worker's effective cwd (matching pi-chat's own `spawnConversationTmux`); pi-chat switches effective cwd into the Gondolin VM workspace when the sandbox starts.
+- `forkSessionForThread` pre-creates the thread's channel workspace dir as a belt-and-suspenders measure.
+
+### Docs
+- Added recovery instructions for threads created by 0.4.0/0.4.1 whose workers are stuck on the cwd prompt.
+
 ## [0.4.1] - 2026-05-29
 
 ### Fixed

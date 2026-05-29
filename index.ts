@@ -196,7 +196,7 @@ async function chatThreadCreateOrAttach(
 		threadName: created.name,
 		createdAt: new Date().toISOString(),
 	};
-	const forked = await forkSessionForThread({ sourceSessionFile, thread, threadState: state });
+	const forked = await forkSessionForThread({ sourceSessionFile, thread, threadState: state, workerCwd: ctx.cwd });
 	const start = startWorker({ conversationId: thread.conversationId, sessionFile: forked, cwd: ctx.cwd });
 
 	const entry: ThreadCatalogEntry = {

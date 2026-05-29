@@ -75,12 +75,20 @@ export async function forkSessionForThread(params: {
 	sourceSessionFile: string;
 	thread: ResolvedConversation;
 	threadState: ThreadState;
+	workerCwd: string;
 }): Promise<string> {
 	const info = await stat(params.sourceSessionFile).catch(() => undefined);
 	if (!info?.isFile()) throw new Error(`No persisted current pi session found: ${params.sourceSessionFile}`);
 	const realSessionDir = join(params.thread.accountDir, "..", "..", "tmux-sessions", tmuxSafeName(params.thread.conversationId));
 	await mkdir(realSessionDir, { recursive: true });
-	const sm = SessionManager.forkFrom(params.sourceSessionFile, params.thread.workspaceDir, realSessionDir);
+	// Pre-create the thread's channel workspace dir so pi-chat does not have to bootstrap it
+	// later and so any session that records this path as cwd will not trigger a missing-cwd prompt.
+	await mkdir(params.thread.workspaceDir, { recursive: true });
+	// Use the parent worker's effective cwd as the forked session's cwd. pi-chat will switch
+	// effective cwd into the Gondolin VM workspace on its own when the sandbox starts. If we
+	// stored the (not-yet-mounted) thread workspace path here, the worker would block on an
+	// interactive "cwd from session file does not exist" prompt before it ever loaded pi-chat.
+	const sm = SessionManager.forkFrom(params.sourceSessionFile, params.workerCwd, realSessionDir);
 	const file = sm.getSessionFile();
 	if (!file) throw new Error("Session fork did not produce a file");
 	sm.appendCustomEntry(PI_CHAT_STATE_TYPE, { conversationId: params.thread.conversationId });

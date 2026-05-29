@@ -63,6 +63,24 @@ So we document and wait. File an upstream issue with the receipt above when you 
 
 Mounts do not propagate to existing threads after creation. By design: a thread's VM should be a stable, named environment, not a moving target.
 
-## 3. Reload still relies on `@bot /new`
+## 3. Recovering a stuck thread worker from before 0.4.2
+
+If a thread was created with `pi-ez-chat-threads` < 0.4.2, its forked session may have recorded the (then-nonexistent) channel workspace dir as `cwd`. The worker then blocks at pi's interactive "cwd from session file does not exist" prompt at startup, never starts the Discord listener, and never replies in the thread.
+
+0.4.2 fixes new threads. For existing stuck threads:
+
+```bash
+tmux kill-session -t pi-chat-worker-<conversation-id-with-/->
+```
+
+then from the parent channel:
+
+```text
+@bot /chat-thread <name>
+```
+
+The attach path will rebuild the worker against the existing session file. If the original session file still records the bad cwd, end the thread (`/chat-thread end <name>` from the parent) and create it again with a fresh name (or `--reactivate` once you have manually re-forked).
+
+## 4. Reload still relies on `@bot /new`
 
 There is no extension API for restarting the current pi-chat sandbox from inside the VM. `pi-chat` parses `/new` in the host bridge before the worker's `input` hooks fire, so no third-party extension can intercept it cleanly. The supported reload action is `@bot /new` in the channel, with the upstream caveat in section 1 above. Until that lands, `pi-ez-chat-mount` and `pi-ez-chat-git` print a reload hint instead of registering a stub command.

@@ -163,7 +163,7 @@ async function main() {
 		const assistant = { type: "message", id: "a", parentId: "u", timestamp: "2026-01-01T00:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } };
 		await writeFile(fakeSession, [header, user, assistant].map((x) => JSON.stringify(x)).join("\n") + "\n");
 		const state: ThreadState = { parentConversationId: parent.conversationId, threadConversationId: thread.conversationId, threadId: "1234567890", threadName: "feature idea", createdAt: "now" };
-		const forked = await forkSessionForThread({ sourceSessionFile: fakeSession, thread, threadState: state });
+		const forked = await forkSessionForThread({ sourceSessionFile: fakeSession, thread, threadState: state, workerCwd: work });
 		const forkedText = await readFile(forked, "utf8");
 		check("forked session contains pi-chat binding", forkedText.includes('"customType":"pi-chat-state"'));
 		check("forked session contains thread binding", forkedText.includes('"customType":"pi-ez-chat-thread"'));
