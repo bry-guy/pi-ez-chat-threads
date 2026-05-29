@@ -369,6 +369,10 @@ async function dispatch(raw: string, ctx: ExtensionContext): Promise<DispatchRes
 	return { message, selfStopped: false };
 }
 
+function fenced(text: string): string {
+	return `\`\`\`\n${text.replace(/```/g, "`​``")}\n\`\`\``;
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("chat-thread", {
 		description: "Manage persistent Discord-thread-backed pi-chat sessions (start/stop/restart/list)",
@@ -395,12 +399,12 @@ export default function (pi: ExtensionAPI) {
 			}
 			return {
 				action: "transform",
-				text: `The remote /chat-thread command completed. Reply to the user with this result exactly:\n\n${result.message}`,
+				text: `The remote /chat-thread command completed. Reply to the user with exactly this fenced code block and no other text:\n\n${fenced(result.message)}`,
 			};
 		} catch (err) {
 			return {
 				action: "transform",
-				text: `The remote /chat-thread command failed. Reply to the user with this error and usage:\n\n${(err as Error).message}\n\n${USAGE}`,
+				text: `The remote /chat-thread command failed. Reply to the user with exactly this fenced code block and no other text:\n\n${fenced(`${(err as Error).message}\n\n${USAGE}`)}`,
 			};
 		}
 	});
