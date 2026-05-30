@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import {
 	addThreadConversation,
@@ -8,6 +8,7 @@ import {
 	removeConversation,
 	resolveConversation,
 	saveChatConfig,
+	tmuxSafeName,
 	type ResolvedConversation,
 } from "./src/chat.js";
 import {
@@ -444,6 +445,102 @@ async function killThread(
 	return lines.join("\n");
 }
 
+interface ResumeChoice {
+	entry: ThreadCatalogEntry;
+	parentName: string;
+	workerAlive: boolean;
+}
+
+function resumeChoiceLabel(choice: ResumeChoice): string {
+	return `${choice.entry.name}  ${choice.workerAlive ? "running" : "dormant"}  — ${choice.parentName}`;
+}
+
+async function listResumeChoices(parentConversationId?: string): Promise<ResumeChoice[]> {
+	const [catalog, config] = await Promise.all([readCatalog(), loadChatConfig()]);
+	const choices: ResumeChoice[] = [];
+	for (const entry of Object.values(catalog.threads)) {
+		if (parentConversationId && entry.parentConversationId !== parentConversationId) continue;
+		if (!resolveConversation(config, entry.threadConversationId)) continue;
+		const parent = resolveConversation(config, entry.parentConversationId);
+		choices.push({
+			entry,
+			parentName: parent?.conversationName ?? entry.parentConversationId,
+			workerAlive: isWorkerAlive(entry.threadConversationId),
+		});
+	}
+	return choices.sort((a, b) => a.parentName.localeCompare(b.parentName) || a.entry.name.localeCompare(b.entry.name));
+}
+
+async function resolveResumeChoice(raw: string, ctx: ExtensionContext): Promise<ResumeChoice> {
+	const flags = parseFlags(tokenize(raw));
+	const name = flags.positional.join(" ").trim();
+	const entries = ctx.sessionManager.getEntries();
+	const currentThread = getCurrentThreadState(entries);
+	const connectedConversationId = getCurrentPiChatConversationId(entries);
+	const scopedParent = flags.parentConversationId ?? currentThread?.parentConversationId ?? connectedConversationId;
+	const choices = await listResumeChoices(name ? undefined : scopedParent);
+	if (choices.length === 0) throw new Error(scopedParent ? `No managed threads for ${scopedParent}.` : "No managed chat threads found.");
+
+	if (!name) {
+		if (!ctx.hasUI) throw new Error("/chat-resume requires a thread name when no local Pi UI is available.");
+		const labels = choices.map(resumeChoiceLabel);
+		const selected = await ctx.ui.select("Resume pi-chat thread", labels);
+		if (!selected) throw new Error("Resume cancelled.");
+		const index = labels.indexOf(selected);
+		if (index < 0) throw new Error("Resume selection was not recognized.");
+		return choices[index];
+	}
+
+	const normalized = normalizeThreadName(name);
+	let matches = scopedParent && !flags.parentConversationId ? await listResumeChoices(scopedParent) : await listResumeChoices(flags.parentConversationId);
+	matches = matches.filter((choice) => choice.entry.normalizedName === normalized);
+	if (matches.length === 0 && scopedParent && !flags.parentConversationId) {
+		matches = (await listResumeChoices()).filter((choice) => choice.entry.normalizedName === normalized);
+	}
+	if (matches.length === 0) throw new Error(`No managed thread named '${name}'.`);
+	if (matches.length > 1) throw new Error(`Multiple managed threads named '${name}'. Pass --parent=<account/channel>.`);
+	return matches[0];
+}
+
+async function resumeThreadSession(raw: string, ctx: ExtensionCommandContext): Promise<string | undefined> {
+	const choice = await resolveResumeChoice(raw, ctx);
+	const sessionFile =
+		(await existingSessionFile(choice.entry.lastSessionFile)) ??
+		(await existingSessionFile(await findMostRecentWorkerSession(choice.entry.threadConversationId)));
+	if (!sessionFile) throw new Error(`No saved session file for thread '${choice.entry.name}'.`);
+
+	if (choice.workerAlive) {
+		if (!ctx.hasUI) throw new Error(`Thread '${choice.entry.name}' is already running. Stop it first or attach to ${isWorkerAlive(choice.entry.threadConversationId) ? "the tmux worker" : "it"}.`);
+		const tmuxName = tmuxSafeName(choice.entry.threadConversationId);
+		const attachCommand = `tmux attach -t ${tmuxName}`;
+		const action = await ctx.ui.select(`Thread '${choice.entry.name}' is already running`, [
+			"Take over here: stop worker and resume session",
+			`Show attach command (${attachCommand})`,
+			"Cancel",
+		]);
+		if (!action || action === "Cancel") return "Resume cancelled.";
+		if (action.startsWith("Show attach command")) return `Attach to the running worker with:\n\n${attachCommand}`;
+		const config = await loadChatConfig();
+		const account = resolveAccountForEntry(config, undefined, choice.entry);
+		if (account?.service === "discord") {
+			await sendDiscordChannelMessage({
+				account,
+				channelId: choice.entry.threadId,
+				content: `Taking over pi-chat thread **${choice.entry.name}** in a local Pi session.`,
+			});
+		}
+		killWorker(choice.entry.threadConversationId);
+		choice.entry.stoppedAt = new Date().toISOString();
+		choice.entry.lastSessionFile = sessionFile;
+		const catalog = await readCatalog();
+		upsertEntry(catalog, choice.entry);
+		await writeCatalog(catalog);
+	}
+
+	await ctx.switchSession(sessionFile);
+	return undefined;
+}
+
 interface DispatchResult {
 	message: string;
 	/** True when the calling worker is about to be killed by this command. */
@@ -530,6 +627,18 @@ function fenced(text: string): string {
 
 export default function (pi: ExtensionAPI) {
 	let stopSupervisor: (() => void) | undefined;
+
+	pi.registerCommand("chat-resume", {
+		description: "Resume a managed Discord thread-backed pi-chat session by thread name",
+		handler: async (raw, ctx) => {
+			try {
+				const message = await resumeThreadSession(raw, ctx);
+				if (message) ctx.ui.notify(message, "info");
+			} catch (err) {
+				ctx.ui.notify(`${(err as Error).message}\n\nUsage: /chat-resume [thread-name] [--parent=<account/channel>]`, "error");
+			}
+		},
+	});
 
 	pi.registerCommand("chat-thread", {
 		description: "Manage persistent Discord-thread-backed pi-chat sessions (start/stop/restart/list)",

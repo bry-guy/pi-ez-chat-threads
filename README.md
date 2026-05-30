@@ -40,6 +40,8 @@ All commands work the same from a pi session and from Discord (`@bot /chat-threa
 - `/chat-thread kill` (inside a thread) — Kill the current thread. The worker exits and the Discord thread is closed.
 - `/chat-thread rename <target> <name>` — Rename a managed thread in the catalog, pi-chat conversation config, and Discord.
 - `/chat-thread list` — List managed threads for the connected channel and show worker status.
+- `/chat-resume` — Local interactive picker for managed Discord thread sessions. Shows friendly Discord thread names and switches the current desktop Pi into the selected thread session.
+- `/chat-resume <name>` — Resume a named managed thread directly. If the thread worker is running, local UI asks whether to show the tmux attach command or stop the worker and take over in the current Pi.
 - `--parent=<account/channel>` — Specify a parent channel explicitly when no pi-chat context is connected.
 
 Names are required for `start`. There is no automatic naming from the current pi session; explicit names are how you and the agent agree on identity, especially from Discord where pi session names are invisible.
@@ -70,6 +72,12 @@ Lifecycle notices (`Starting pi-chat thread X.` / `Stopping pi-chat thread X.` /
 7. Forks the current pi session into the thread's worker session directory and stamps it with `pi-chat-state` and `pi-ez-chat-thread` custom entries.
 8. Spawns the worker tmux for the new conversation id using the current process environment and forwarded pi runtime flags, replacing only the session/session-dir/conversation binding.
 9. Records the thread in `~/.pi/agent/chat-threads/threads.json` as our lifecycle catalog.
+
+## What `/chat-resume` does
+
+`/chat-resume` is for local desktop Pi sessions. It does not parse raw tmux/session ids; it reads the managed thread catalog and presents Discord thread names. Choosing a dormant thread switches the current Pi to the thread's saved JSONL session file, whose persisted pi-chat state reconnects the session to the Discord thread. Choosing a running thread lets you either view the `tmux attach` command or stop that worker and take over locally.
+
+Remote Discord users should keep using `/chat-thread start <name>` / `/chat-thread restart <name>`; `/chat-resume` is intentionally a local session-switching command.
 
 ## What `start <name>` / `restart <name>` does for an existing thread
 

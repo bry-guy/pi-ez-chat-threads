@@ -45,14 +45,15 @@ function fakeConversation(root: string, channelKey: string, id: string): Resolve
 async function main() {
 	const work = await mkdtemp(join(tmpdir(), "pi-ez-chat-threads-test-"));
 	try {
-		let registered = "";
+		const registered: string[] = [];
 		let inputHook = false;
 		let inputHandler: any;
 		extension({
-			registerCommand: (name: string) => { registered = name; },
+			registerCommand: (name: string) => { registered.push(name); },
 			on: (event: string, handler: any) => { if (event === "input") { inputHook = true; inputHandler = handler; } },
 		} as any);
-		check("pi extension registers /chat-thread", registered === "chat-thread");
+		check("pi extension registers /chat-thread", registered.includes("chat-thread"));
+		check("pi extension registers /chat-resume", registered.includes("chat-resume"));
 		check("pi extension registers remote input hook", inputHook);
 		check("remote input hook is callable", !!inputHandler);
 
