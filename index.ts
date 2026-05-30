@@ -32,6 +32,7 @@ import {
 	getCurrentThreadState,
 	type ThreadState,
 } from "./src/session.js";
+import { startThreadSupervisor } from "./src/supervisor.js";
 import { isWorkerAlive, killWorker, startWorker } from "./src/worker.js";
 
 type Verb = "start" | "stop" | "restart" | "kill" | "rename" | "list" | "help";
@@ -528,6 +529,8 @@ function fenced(text: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
+	let stopSupervisor: (() => void) | undefined;
+
 	pi.registerCommand("chat-thread", {
 		description: "Manage persistent Discord-thread-backed pi-chat sessions (start/stop/restart/list)",
 		handler: async (raw, ctx) => {
@@ -538,6 +541,16 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify(`${(err as Error).message}\n\n${USAGE}`, "error");
 			}
 		},
+	});
+
+	pi.on("session_start", async (_event, ctx) => {
+		stopSupervisor?.();
+		stopSupervisor = startThreadSupervisor(ctx);
+	});
+
+	pi.on("session_shutdown", async () => {
+		stopSupervisor?.();
+		stopSupervisor = undefined;
 	});
 
 	pi.on("input", async (event, ctx) => {

@@ -80,6 +80,19 @@ If a thread was created with `pi-ez-chat-threads` < 0.4.2, its forked session ma
 @bot /chat-thread <new-name>
 ```
 
-## 4. Reload still relies on `@bot /new`
+## 4. Supervisor wake-up starts the worker but does not replay the wake-up request
+
+The parent-channel supervisor can detect a new user message in a dormant managed Discord thread and restart that thread's tmux worker. It posts:
+
+```text
+Waking pi-chat thread <name>.
+pi-chat thread <name> has restarted (...). Please resend your request now.
+```
+
+The resend is currently necessary because upstream pi-chat catches up missed Discord messages before arming the runtime for new jobs. The message that woke the worker is recorded in the pi-chat channel log, but it is not queued as an agent turn. A clean upstream fix would let pi-chat start from a specific Discord wake-up message or intentionally queue the latest catch-up trigger.
+
+`pi-ez-chat-threads` deliberately does not fake this by injecting tmux keystrokes or mutating pi-chat's private job queue. The supervisor only starts the durable thread session and tells the user when to resend.
+
+## 5. Reload still relies on `@bot /new`
 
 There is no extension API for restarting the current pi-chat sandbox from inside the VM. `pi-chat` parses `/new` in the host bridge before the worker's `input` hooks fire, so no third-party extension can intercept it cleanly. The supported reload action is `@bot /new` in the channel, with the upstream caveat in section 1 above. Until that lands, `pi-ez-chat-mount` and `pi-ez-chat-git` print a reload hint instead of registering a stub command.

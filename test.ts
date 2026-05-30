@@ -16,6 +16,7 @@ import {
 	getCurrentThreadState,
 	type ThreadState,
 } from "./src/session.js";
+import { compareDiscordSnowflakes, latestUserMessage, shouldWakeForMessage } from "./src/supervisor.js";
 import { buildWorkerCommand, forwardedPiArgs, startWorker } from "./src/worker.js";
 
 interface TR { name: string; ok: boolean; details?: string }
@@ -62,6 +63,19 @@ async function main() {
 		check("remote matcher handles transcript-shaped commands", matchSlashCommand("- [t] [uid:1] u: <@1> /chat-thread foo", ["chat-thread"])?.args === "foo");
 		check("remote normalizer keeps plain text", normalizeRemoteCommandText("- [t] [uid:1] u: hello") === "hello");
 		check("remote chat-thread forces non-interactive mode", !canPrompt({ hasUI: true } as any, true));
+
+		// Supervisor wake decisions
+		check("snowflake compare handles large ids", compareDiscordSnowflakes("1509775335015841804", "1509775335015841803") > 0);
+		const latest = latestUserMessage([
+			{ id: "3", timestamp: "2026-01-01T00:00:03.000Z", authorId: "bot", authorBot: true },
+			{ id: "2", timestamp: "2026-01-01T00:00:02.000Z", authorId: "u", authorBot: false },
+			{ id: "1", timestamp: "2026-01-01T00:00:01.000Z", authorId: "u", authorBot: false },
+		], "bot");
+		check("supervisor latestUserMessage ignores bot messages", latest?.id === "2");
+		check("supervisor wakes for newer unseen dormant message", shouldWakeForMessage({ latest, lastSeenId: "1", workerAlive: false }) === true);
+		check("supervisor does not wake running worker", shouldWakeForMessage({ latest, lastSeenId: "1", workerAlive: true }) === false);
+		check("supervisor wakes for message after stoppedAt on first observation", shouldWakeForMessage({ latest, stoppedAt: "2026-01-01T00:00:01.500Z", workerAlive: false }) === true);
+		check("supervisor seeds old dormant messages without waking", shouldWakeForMessage({ latest, stoppedAt: "2026-01-01T00:00:03.000Z", workerAlive: false }) === false);
 
 		// Subcommand parser
 		check("parser rejects empty input", parseSubcommand("").verb === "help");
