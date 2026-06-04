@@ -1,98 +1,69 @@
 # Known issues
 
-## 1. Upstream pi-chat `/new` does not actually start a new pi session
+The bigger upstream issues this package depends on — `/new` not actually
+restarting the worker, no extension API for restarting the sandbox, no
+first-class pi-chat threads, no way to queue a wake-up message as an agent
+turn — are all rolled up in a single document:
 
-When a Discord user sends `@bot /new`, three things happen and only the first two actually work:
+**[pi-ez-lib/wishlist.md](../../pi-ez-lib/wishlist.md)**
 
-1. pi-chat's host process detects `new` as a control command (`ConversationRuntime.parseControlCommand`) and immediately replies "Starting a new pi session" to Discord.
-2. The same inbound Discord message is appended to the conversation transcript so the worker sees a normal transcript turn containing `<@bot> /new`.
-3. pi-chat tries to actually start the new session by calling, on the worker side:
-   ```ts
-   pi.sendUserMessage("/chat-new", { deliverAs: "followUp" });
-   ```
+Items relevant to this package:
 
-Step 3 silently fails to invoke the registered `chat-new` command. `sendUserMessage` calls `agent-session.prompt(text, { expandPromptTemplates: false, source: "extension" })`, and `prompt()` only matches registered extension commands when `expandPromptTemplates` is `true`:
+- §1 — `@bot /new` is documented as the reload action everywhere, but the
+  upstream catch in §1 is that `/new` silently fails to actually start a
+  new pi session: pi-chat posts the friendly "Starting a new pi session"
+  reply from the host bridge, then injects `/chat-new` via
+  `pi.sendUserMessage(..., { deliverAs: "followUp" })`, and
+  `agent-session.prompt(text, { expandPromptTemplates: false })` drops
+  slash commands. The receipts (call site, gate, registered command) are
+  in the wishlist.
+- §6 — supervisor wake-up starts a dormant thread worker but cannot queue
+  the wake-up Discord message as an agent turn. The supervisor therefore
+  posts a "please resend your request" notice after restart. We
+  deliberately do not fake this from the extension side.
+- §7 — first-class pi-chat threads (so mount inheritance, lifecycle
+  catalog, and session forking move from this package into pi-chat itself).
 
-```ts
-// node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js
-if (expandPromptTemplates && text.startsWith("/")) {
-  const handled = await this._tryExecuteExtensionCommand(text);
-  ...
-}
-```
+## Package-local notes
 
-So `/chat-new` falls through the `input` hook pipeline as a plain user message, the LLM has no `chat_new` tool, and the agent responds with something like:
+### Threads add lifecycle on top of pi-chat conversations, not on top of pi-chat itself
 
-```text
-I received /chat-new as plain text here. No chat_new tool/command is exposed to me inside this VM.
-```
-
-### Symptom on Discord
-
-The Discord channel shows the friendly "Starting a new pi session" because that comes from the host-side step 1. But the worker is not actually reset; the next message in the channel goes to the same old session.
-
-### Where this lives
-
-- Upstream pi-chat call site: `index.ts` near line 736 (`pi.sendUserMessage("/chat-new", { deliverAs: "followUp" })`).
-- Upstream gate that drops the command: `pi-coding-agent` `agent-session.js`'s `prompt(text, options)` guarded by `expandPromptTemplates && text.startsWith("/")`.
-- Registered command: `pi.registerCommand("chat-new", ...)` in pi-chat's `index.ts`.
-
-### Why we are not patching around this in pi-ez
-
-The clean fix is upstream. We have two upstream-friendly options that pi-chat owns:
-
-1. In pi-chat, replace the `sendUserMessage("/chat-new", ...)` inject with a direct call to `ctx.newSession({ parentSession: ..., setup: bind pi-chat-state })`. This is essentially what the `chat-new` command handler already does — pi-chat should call it directly instead of round-tripping through a fake user message.
-2. In `pi-coding-agent`, have `prompt()` (or `sendUserMessage()`) still consult registered extension commands for slash-prefixed text even when `expandPromptTemplates` is `false`. Today's check intentionally couples command dispatch to template expansion, which is too coarse.
-
-We could intercept `/chat-new` in our `input` hook (when `event.source === "extension"`) and call `ctx.newSession()` ourselves. We choose not to:
-
-- `/chat-new` is pi-chat's command, not ours. Silently shadowing it from a sibling extension is hostile to future pi-chat changes and confusing for users debugging which extension owns which behavior.
-- The pi-chat metadata required to keep the worker bound to the conversation (currently a `pi-chat-state` custom entry with `conversationId`) is also a pi-chat-private contract. Re-implementing it in a third-party extension means we have to track every internal change.
-- Our other "fragile until upstream lands" workarounds (`VM.create` wrapping in `pi-ez-chat-mount` and `pi-ez-chat-git`) at least sit on the documented Gondolin API surface. A `/chat-new` reimplementation would not.
-
-So we document and wait. File an upstream issue with the receipt above when you want this fixed.
-
-## 2. Threads add lifecycle on top of pi-chat conversations, not on top of pi-chat itself
-
-`pi-ez-chat-threads` does not extend pi-chat's session/VM model. A "thread" is mechanically just another pi-chat conversation (`<accountId>/<channelKey>`) registered in `~/.pi/agent/chat/config.json` with extra metadata (`managedBy: "pi-ez-chat-threads"`, `parentConversationId`). We add:
+`pi-ez-chat-threads` does not extend pi-chat's session/VM model. A "thread"
+is mechanically just another pi-chat conversation
+(`<accountId>/<channelKey>`) registered in `~/.pi/agent/chat/config.json`
+with extra metadata (`managedBy: "pi-ez-chat-threads"`,
+`parentConversationId`). We layer on:
 
 - a Discord thread creation step,
-- mount inheritance at fork time (via `~/.pi/agent/chat-mount/mounts.json`),
-- a fork of the parent's pi session into the thread's worker session directory,
+- mount inheritance at fork time (via
+  `~/.pi/agent/chat-mount/mounts.json`),
+- a fork of the parent's pi session into the thread's worker session
+  directory,
 - a lifecycle catalog at `~/.pi/agent/chat-threads/threads.json`.
 
-Mounts do not propagate to existing threads after creation. By design: a thread's VM should be a stable, named environment, not a moving target.
+Mounts do not propagate to existing threads after creation. By design: a
+thread's VM should be a stable, named environment, not a moving target.
 
-## 3. Recovering a stuck thread worker from before 0.4.2
+### Recovering a stuck thread worker from before 0.4.2
 
-If a thread was created with `pi-ez-chat-threads` < 0.4.2, its forked session may have recorded the (then-nonexistent) channel workspace dir as `cwd`. The worker then blocks at pi's interactive "cwd from session file does not exist" prompt at startup, never starts the Discord listener, and never replies in the thread.
+If a thread was created with `pi-ez-chat-threads` < 0.4.2, its forked
+session may have recorded the (then-nonexistent) channel workspace dir as
+`cwd`. The worker then blocks at pi's interactive "cwd from session file
+does not exist" prompt at startup, never starts the Discord listener, and
+never replies in the thread.
 
-0.4.2 fixes new threads. For existing stuck threads, from the parent channel:
+0.4.2 fixes new threads. For existing stuck threads, from the parent
+channel:
 
 ```text
 @bot /chat-thread restart <name>
 ```
 
-`restart` kills the wedged tmux worker and respawns against the recorded session file. If the original session file still records the bad cwd, stop the thread and start a new one with a different name:
+`restart` kills the wedged tmux worker and respawns against the recorded
+session file. If the original session file still records the bad cwd, stop
+the thread and start a new one with a different name:
 
 ```text
 @bot /chat-thread stop <name>
 @bot /chat-thread <new-name>
 ```
-
-## 4. Supervisor wake-up starts the worker but does not replay the wake-up request
-
-The parent-channel supervisor can detect a new user message in a dormant managed Discord thread and restart that thread's tmux worker. It posts:
-
-```text
-Waking pi-chat thread <name>.
-pi-chat thread <name> has restarted (...). Please resend your request now.
-```
-
-The resend is currently necessary because upstream pi-chat catches up missed Discord messages before arming the runtime for new jobs. The message that woke the worker is recorded in the pi-chat channel log, but it is not queued as an agent turn. A clean upstream fix would let pi-chat start from a specific Discord wake-up message or intentionally queue the latest catch-up trigger.
-
-`pi-ez-chat-threads` deliberately does not fake this by injecting tmux keystrokes or mutating pi-chat's private job queue. The supervisor only starts the durable thread session and tells the user when to resend.
-
-## 5. Reload still relies on `@bot /new`
-
-There is no extension API for restarting the current pi-chat sandbox from inside the VM. `pi-chat` parses `/new` in the host bridge before the worker's `input` hooks fire, so no third-party extension can intercept it cleanly. The supported reload action is `@bot /new` in the channel, with the upstream caveat in section 1 above. Until that lands, `pi-ez-chat-mount` and `pi-ez-chat-git` print a reload hint instead of registering a stub command.
