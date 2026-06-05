@@ -54,6 +54,24 @@ export async function sendDiscordChannelMessage(params: {
 	}).catch(() => undefined);
 }
 
+export async function sendDiscordChannelEmbed(params: {
+	account: ChatAccountConfig;
+	channelId: string;
+	title: string;
+	description: string;
+	fetchImpl?: typeof fetch;
+}): Promise<void> {
+	if (!params.account.botToken) return;
+	const fetcher = params.fetchImpl ?? fetch;
+	await fetcher(`https://discord.com/api/v10/channels/${params.channelId}/messages`, {
+		method: "POST",
+		headers: { Authorization: `Bot ${params.account.botToken}`, "content-type": "application/json" },
+		body: JSON.stringify({
+			embeds: [{ title: params.title, description: params.description }],
+		}),
+	}).catch(() => undefined);
+}
+
 export async function renameDiscordThread(params: {
 	account: ChatAccountConfig;
 	threadId: string;
@@ -99,10 +117,11 @@ export async function sendDiscordThreadIntro(params: {
 	content: string;
 	fetchImpl?: typeof fetch;
 }): Promise<void> {
-	return sendDiscordChannelMessage({
+	return sendDiscordChannelEmbed({
 		account: params.account,
 		channelId: params.threadId,
-		content: params.content,
+		title: "Thread lifecycle",
+		description: params.content,
 		fetchImpl: params.fetchImpl,
 	});
 }

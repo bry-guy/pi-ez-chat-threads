@@ -4,8 +4,8 @@ import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { CHAT_HOME, loadChatConfig, resolveConversation, tmuxSafeName, type ChatAccountConfig, type ResolvedConversation } from "./chat.js";
-import { listForParent, readCatalog, upsertEntry, writeCatalog, type ThreadCatalogEntry } from "./catalog.js";
-import { sendDiscordChannelMessage } from "./discord.js";
+import { listForParent, readCatalog, reconcileCatalogWorkerState, upsertEntry, writeCatalog, type ThreadCatalogEntry } from "./catalog.js";
+import { sendDiscordChannelEmbed } from "./discord.js";
 import { findMostRecentWorkerSession, getCurrentPiChatConversationId, getCurrentThreadState } from "./session.js";
 import { isWorkerAlive, killWorker, startWorker } from "./worker.js";
 
@@ -169,18 +169,20 @@ async function maybeSuspendIdleThread(params: {
 		latestDiscordUserMs !== undefined && Number.isFinite(latestDiscordUserMs) ? latestDiscordUserMs : 0,
 	);
 	if (!effectiveLastMs || params.nowMs - effectiveLastMs < params.idleSuspendMs) return;
-	if (!killWorker(params.entry.threadConversationId)) return;
+	const stoppedAt = new Date(params.nowMs).toISOString();
+	if (!killWorker(params.entry.threadConversationId, undefined, { now: new Date(params.nowMs) })) return;
 
-	params.entry.stoppedAt = new Date(params.nowMs).toISOString();
+	params.entry.stoppedAt = stoppedAt;
 	params.entry.lastSessionFile = status.sessionFile ?? params.entry.lastSessionFile;
 	const catalog = await readCatalog();
 	upsertEntry(catalog, params.entry);
 	await writeCatalog(catalog);
 	if (params.suspendNotice && params.conversation.account.service === "discord") {
-		await sendDiscordChannelMessage({
+		await sendDiscordChannelEmbed({
 			account: params.conversation.account,
 			channelId: params.entry.threadId,
-			content: `Suspending idle pi-chat thread **${params.entry.name}**. It will wake on the next message.`,
+			title: "Thread lifecycle",
+			description: `Suspending idle pi-chat thread **${params.entry.name}**. It will wake on the next message.`,
 		});
 	}
 }
@@ -195,10 +197,11 @@ async function wakeThread(params: {
 	if (params.state.waking.has(key)) return;
 	params.state.waking.add(key);
 	try {
-		await sendDiscordChannelMessage({
+		await sendDiscordChannelEmbed({
 			account: params.conversation.account,
 			channelId: params.entry.threadId,
-			content: `Waking pi-chat thread **${params.entry.name}**.`,
+			title: "Thread lifecycle",
+			description: `Waking pi-chat thread **${params.entry.name}**.`,
 		});
 		const sessionFile = params.entry.lastSessionFile ?? (await findMostRecentWorkerSession(params.entry.threadConversationId));
 		if (!sessionFile) throw new Error(`No saved session file for ${params.entry.name}.`);
@@ -208,17 +211,19 @@ async function wakeThread(params: {
 		const catalog = await readCatalog();
 		upsertEntry(catalog, params.entry);
 		await writeCatalog(catalog);
-		await sendDiscordChannelMessage({
+		await sendDiscordChannelEmbed({
 			account: params.conversation.account,
 			channelId: params.entry.threadId,
-			content: `pi-chat thread **${params.entry.name}** has restarted (${start.tmuxName}). Please resend your request now.`,
+			title: "Thread lifecycle",
+			description: `pi-chat thread **${params.entry.name}** has restarted (${start.tmuxName}). Please resend your request now.`,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		await sendDiscordChannelMessage({
+		await sendDiscordChannelEmbed({
 			account: params.conversation.account,
 			channelId: params.entry.threadId,
-			content: `Failed to wake pi-chat thread **${params.entry.name}**: ${message}`,
+			title: "Thread lifecycle",
+			description: `Failed to wake pi-chat thread **${params.entry.name}**: ${message}`,
 		});
 	} finally {
 		params.state.waking.delete(key);
@@ -234,7 +239,7 @@ export async function tickThreadSupervisor(ctx: ExtensionContext, state: Supervi
 	const config = await loadChatConfig();
 	const parent = resolveConversation(config, parentConversationId);
 	if (!parent || parent.service !== "discord" || parent.channel.managedBy === "pi-ez-chat-threads") return;
-	const catalog = await readCatalog();
+	const catalog = reconcileCatalogWorkerState(await readCatalog());
 	const managed = listForParent(catalog, parent.conversationId);
 	for (const entry of managed) {
 		const conversation = resolveConversation(config, entry.threadConversationId);

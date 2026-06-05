@@ -16,13 +16,14 @@ import {
 	findByThreadConversationId,
 	listForParent,
 	normalizeThreadName,
+	reconcileCatalogWorkerState,
 	readCatalog,
 	removeEntry,
 	upsertEntry,
 	writeCatalog,
 	type ThreadCatalogEntry,
 } from "./src/catalog.js";
-import { closeDiscordThread, createDiscordThread, renameDiscordThread, sendDiscordChannelMessage, sendDiscordThreadIntro } from "./src/discord.js";
+import { closeDiscordThread, createDiscordThread, renameDiscordThread, sendDiscordChannelEmbed, sendDiscordThreadIntro } from "./src/discord.js";
 import { inheritChatGitConfig, removeChatGitConfig } from "./src/git.js";
 import { inheritMounts, removeMountsForConversation } from "./src/mounts.js";
 import { matchSlashCommand } from "./src/match.js";
@@ -127,17 +128,17 @@ async function resolveParent(
 }
 
 function describeThread(entry: ThreadCatalogEntry, workerAlive: boolean): string {
-	const status = entry.stoppedAt ? `stopped at ${entry.stoppedAt}` : workerAlive ? "running" : "started but worker not running";
+	const status = workerAlive ? "running" : entry.stoppedAt ? `stopped at ${entry.stoppedAt}` : "crashed or missing worker";
 	return `- ${entry.name}  [${entry.normalizedName}]  ${status}\n    conversation: ${entry.threadConversationId}\n    thread id: ${entry.threadId}`;
 }
 
 async function listThreads(parent: ResolvedConversation): Promise<string> {
-	const catalog = await readCatalog();
+	const catalog = reconcileCatalogWorkerState(await readCatalog());
 	const entries = listForParent(catalog, parent.conversationId);
 	if (entries.length === 0) return `No managed threads for ${parent.conversationId}.`;
 	const lines = [`Managed threads for ${parent.conversationId}:`];
 	for (const entry of entries) {
-		const alive = entry.stoppedAt ? false : isWorkerAlive(entry.threadConversationId);
+		const alive = isWorkerAlive(entry.threadConversationId);
 		lines.push(describeThread(entry, alive));
 	}
 	return lines.join("\n");
@@ -210,7 +211,6 @@ async function createFreshThread(
 		normalizedName,
 		createdAt,
 		stoppedAt: null,
-		ownerSessionId: ctx.sessionManager.getSessionId(),
 		lastSessionFile: forked,
 	};
 	const catalog = await readCatalog();
@@ -238,40 +238,50 @@ async function createFreshThread(
 	return { entry, message };
 }
 
-interface RestartParams {
+interface StartExistingParams {
 	entry: ThreadCatalogEntry;
-	parent: ResolvedConversation;
 	ctx: ExtensionContext;
-	postedDiscordNotice: boolean;
+	forceRestart: boolean;
 }
 
-async function restartExistingThread(params: RestartParams): Promise<string> {
-	const { entry, parent, ctx } = params;
+interface StartExistingResult {
+	message: string;
+	start: ReturnType<typeof startWorker>;
+}
+
+async function startExistingThread(params: StartExistingParams): Promise<StartExistingResult> {
+	const { entry, ctx } = params;
 	const sessionFile = entry.lastSessionFile ?? (await findMostRecentWorkerSession(entry.threadConversationId));
 	if (!sessionFile) throw new Error(`No saved session file for thread '${entry.name}'; cannot restart worker.`);
-	const start = startWorker({ conversationId: entry.threadConversationId, sessionFile, cwd: ctx.cwd, restart: true });
+	const start = startWorker({ conversationId: entry.threadConversationId, sessionFile, cwd: ctx.cwd, restart: params.forceRestart });
 	entry.stoppedAt = null;
 	entry.lastSessionFile = sessionFile;
 	const catalog = await readCatalog();
 	upsertEntry(catalog, entry);
 	await writeCatalog(catalog);
 
-	if (!params.postedDiscordNotice) {
-		await sendDiscordChannelMessage({
-			account: parent.account,
-			channelId: entry.threadId,
-			content: `Starting pi-chat thread **${entry.name}**.`,
-		});
-	}
+	const firstLine = start.action === "already-running" ? `pi-chat thread ${entry.name} is already running.` : `Starting pi-chat thread ${entry.name}.`;
+	return {
+		start,
+		message: [
+			firstLine,
+			``,
+			`  conversation: ${entry.threadConversationId}`,
+			`  thread id: ${entry.threadId}`,
+			`  worker: ${start.action} (${start.tmuxName})`,
+			`  session: ${sessionFile}`,
+		].join("\n"),
+	};
+}
 
-	return [
-		`Starting pi-chat thread ${entry.name}.`,
-		``,
-		`  conversation: ${entry.threadConversationId}`,
-		`  thread id: ${entry.threadId}`,
-		`  worker: ${start.action} (${start.tmuxName})`,
-		`  session: ${sessionFile}`,
-	].join("\n");
+async function postLifecycleForStart(parent: ResolvedConversation, entry: ThreadCatalogEntry, start: ReturnType<typeof startWorker>): Promise<void> {
+	if (start.action === "already-running") return;
+	await sendDiscordChannelEmbed({
+		account: parent.account,
+		channelId: entry.threadId,
+		title: "Thread lifecycle",
+		description: `${start.action === "restarted" ? "Restarting" : "Starting"} pi-chat thread **${entry.name}**.`,
+	});
 }
 
 async function startOrAttach(rawName: string, parent: ResolvedConversation, ctx: ExtensionContext, verb: "start" | "restart"): Promise<string> {
@@ -281,14 +291,9 @@ async function startOrAttach(rawName: string, parent: ResolvedConversation, ctx:
 	const catalog = await readCatalog();
 	const existing = findByName(catalog, parent.conversationId, normalizedName);
 	if (existing) {
-		// Post the start notice in the thread before (re)starting so users see lifecycle clearly
-		// in Discord. Best-effort; failures are silent.
-		await sendDiscordChannelMessage({
-			account: parent.account,
-			channelId: existing.threadId,
-			content: verb === "restart" ? `Restarting pi-chat thread **${existing.name}**.` : `Starting pi-chat thread **${existing.name}**.`,
-		});
-		return restartExistingThread({ entry: existing, parent, ctx, postedDiscordNotice: true });
+		const result = await startExistingThread({ entry: existing, ctx, forceRestart: verb === "restart" });
+		await postLifecycleForStart(parent, existing, result.start);
+		return result.message;
 	}
 
 	if (verb === "restart") throw new Error(`No managed thread named '${rawName}' under ${parent.conversationId}.`);
@@ -335,10 +340,11 @@ async function stopThread(
 	const account = resolveAccountForEntry(config, parent, entry);
 
 	if (account?.service === "discord") {
-		await sendDiscordChannelMessage({
+		await sendDiscordChannelEmbed({
 			account,
 			channelId: entry.threadId,
-			content: `Stopping pi-chat thread **${entry.name}**.`,
+			title: "Thread lifecycle",
+			description: `Stopping pi-chat thread **${entry.name}**.`,
 		});
 	}
 
@@ -413,10 +419,11 @@ async function killThread(
 	const account = resolveAccountForEntry(config, parent, entry);
 
 	if (account?.service === "discord") {
-		await sendDiscordChannelMessage({
+		await sendDiscordChannelEmbed({
 			account,
 			channelId: entry.threadId,
-			content: `Killing pi-chat thread **${entry.name}**. This will stop the worker, delete local thread configuration, and close this Discord thread.`,
+			title: "Thread lifecycle",
+			description: `Killing pi-chat thread **${entry.name}**. This will stop the worker, delete local thread configuration, and close this Discord thread.`,
 		});
 		await closeDiscordThread({ account, threadId: entry.threadId });
 	}
@@ -523,10 +530,11 @@ async function resumeThreadSession(raw: string, ctx: ExtensionCommandContext): P
 		const config = await loadChatConfig();
 		const account = resolveAccountForEntry(config, undefined, choice.entry);
 		if (account?.service === "discord") {
-			await sendDiscordChannelMessage({
+			await sendDiscordChannelEmbed({
 				account,
 				channelId: choice.entry.threadId,
-				content: `Taking over pi-chat thread **${choice.entry.name}** in a local Pi session.`,
+				title: "Thread lifecycle",
+				description: `Taking over pi-chat thread **${choice.entry.name}** in a local Pi session.`,
 			});
 		}
 		killWorker(choice.entry.threadConversationId);
@@ -599,16 +607,17 @@ async function dispatch(raw: string, ctx: ExtensionContext): Promise<DispatchRes
 			const catalog = await readCatalog();
 			const entry = findByThreadConversationId(catalog, currentThread.threadConversationId);
 			if (!entry) throw new Error(`Current thread is not in the catalog (${currentThread.threadConversationId}); cannot restart.`);
-			await sendDiscordChannelMessage({
+			await sendDiscordChannelEmbed({
 				account: parent.account,
 				channelId: entry.threadId,
-				content: `Restarting pi-chat thread **${entry.name}**.`,
+				title: "Thread lifecycle",
+				description: `Restarting pi-chat thread **${entry.name}**.`,
 			});
 			// Self-restart: killing our own tmux session terminates the worker. The new session
 			// will be spawned by startWorker, but the response message will not reach Discord
 			// because our process dies. The Discord notice above is what the user will see.
-			const message = await restartExistingThread({ entry, parent, ctx, postedDiscordNotice: true });
-			return { message, selfStopped: true };
+			const result = await startExistingThread({ entry, ctx, forceRestart: true });
+			return { message: result.message, selfStopped: true };
 		}
 		throw new Error(`/chat-thread ${sub.verb} requires a <name> (or run /chat-thread restart from inside a thread to restart it).`);
 	}

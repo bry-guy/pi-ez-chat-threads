@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
-import { tmuxSafeName } from "./chat.js";
+import { CHAT_HOME, tmuxSafeName } from "./chat.js";
 
 export interface WorkerSpawnOptions {
 	stdio?: unknown;
@@ -25,10 +27,60 @@ export function isWorkerAlive(conversationId: string, spawn: WorkerSpawn = defau
 	return spawn("tmux", ["has-session", "-t", tmuxName], { stdio: "ignore" }).status === 0;
 }
 
-export function killWorker(conversationId: string, spawn: WorkerSpawn = defaultSpawn()): boolean {
-	if (!isWorkerAlive(conversationId, spawn)) return false;
+export interface WorkerStatusStampOptions {
+	statusDir?: string;
+	now?: Date;
+}
+
+interface WorkerStatusFile {
+	conversationId?: string;
+	conversationName?: string;
+	service?: string;
+	pid?: number;
+	tmuxSession?: string;
+	state?: string;
+	updatedAt?: string;
+	[key: string]: unknown;
+}
+
+export function workerStatusPath(conversationId: string, statusDir = join(CHAT_HOME, "worker-status")): string {
+	return join(statusDir, `${tmuxSafeName(conversationId)}.json`);
+}
+
+function readExistingWorkerStatus(path: string): WorkerStatusFile {
+	try {
+		return JSON.parse(readFileSync(path, "utf8")) as WorkerStatusFile;
+	} catch {
+		return {};
+	}
+}
+
+export function stampWorkerStatus(conversationId: string, state: "dead" | "restarting", options: WorkerStatusStampOptions = {}): void {
+	const path = workerStatusPath(conversationId, options.statusDir);
+	const tmuxSession = tmuxSafeName(conversationId);
+	const existing = readExistingWorkerStatus(path);
+	const next: WorkerStatusFile = {
+		...existing,
+		conversationId: String(existing.conversationId ?? conversationId),
+		tmuxSession: String(existing.tmuxSession ?? tmuxSession),
+		state,
+		pid: state === "dead" ? 0 : typeof existing.pid === "number" ? existing.pid : 0,
+		updatedAt: (options.now ?? new Date()).toISOString(),
+	};
+	mkdirSync(dirname(path), { recursive: true });
+	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+	writeFileSync(tmp, `${JSON.stringify(next, null, "\t")}\n`, "utf8");
+	renameSync(tmp, path);
+}
+
+export function killWorker(conversationId: string, spawn: WorkerSpawn = defaultSpawn(), options: WorkerStatusStampOptions = {}): boolean {
+	if (!isWorkerAlive(conversationId, spawn)) {
+		stampWorkerStatus(conversationId, "dead", options);
+		return false;
+	}
 	const tmuxName = tmuxSafeName(conversationId);
 	const result = spawn("tmux", ["kill-session", "-t", tmuxName], { stdio: "ignore" });
+	if (result.status === 0) stampWorkerStatus(conversationId, "dead", options);
 	return result.status === 0;
 }
 
@@ -74,6 +126,7 @@ export interface WorkerStartParams {
 	restart?: boolean;
 	spawn?: WorkerSpawn;
 	env?: NodeJS.ProcessEnv;
+	statusDir?: string;
 }
 
 export interface WorkerStartResult {
@@ -92,7 +145,10 @@ export function startWorker(params: WorkerStartParams): WorkerStartResult {
 	const tmuxName = tmuxSafeName(params.conversationId);
 	const alive = isWorkerAlive(params.conversationId, spawn);
 	if (alive && !params.restart) return { action: "already-running", tmuxName };
-	if (alive && params.restart) spawn("tmux", ["kill-session", "-t", tmuxName], { stdio: "ignore" });
+	if (alive && params.restart) {
+		const result = spawn("tmux", ["kill-session", "-t", tmuxName], { stdio: "ignore" });
+		if (result.status === 0) stampWorkerStatus(params.conversationId, "restarting", { statusDir: params.statusDir });
+	}
 	const sessionDir = params.sessionFile.replace(/\/[^/]+$/, "");
 	const command = buildWorkerCommand(params.sessionFile, sessionDir, params.conversationId);
 	const env = { ...process.env, ...(params.env ?? {}) };

@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import extension, { assertCanForkFromParent, canPrompt, parseSubcommand } from "./index.js";
 import { addThreadConversation, listDiscordParentConversations, removeConversation, type ChatConfig, type ResolvedConversation } from "./src/chat.js";
-import { findByName, listForParent, normalizeThreadName, readCatalog, removeEntry, upsertEntry, writeCatalog, type ThreadCatalogEntry } from "./src/catalog.js";
-import { closeDiscordThread, createDiscordThread, renameDiscordThread } from "./src/discord.js";
+import { findByName, listForParent, normalizeThreadName, readCatalog, reconcileCatalogWorkerState, removeEntry, upsertEntry, workerAwareEntry, writeCatalog, type ThreadCatalogEntry } from "./src/catalog.js";
+import { closeDiscordThread, createDiscordThread, renameDiscordThread, sendDiscordChannelEmbed, sendDiscordThreadIntro } from "./src/discord.js";
 import { inheritChatGitConfig, readChatGitStore, removeChatGitConfig, writeChatGitStore } from "./src/git.js";
 import { inheritMounts, readMountsConfig, removeMountsForConversation, writeMountsConfig } from "./src/mounts.js";
 import { matchSlashCommand, normalizeRemoteCommandText, stripLeadingMention } from "./src/match.js";
@@ -17,7 +17,7 @@ import {
 	type ThreadState,
 } from "./src/session.js";
 import { compareDiscordSnowflakes, latestUserMessage, shouldWakeForMessage } from "./src/supervisor.js";
-import { buildWorkerCommand, forwardedPiArgs, startWorker } from "./src/worker.js";
+import { buildWorkerCommand, forwardedPiArgs, killWorker, stampWorkerStatus, startWorker, workerStatusPath } from "./src/worker.js";
 
 interface TR { name: string; ok: boolean; details?: string }
 const results: TR[] = [];
@@ -156,6 +156,15 @@ async function main() {
 		}), "utf8");
 		const migrated = await readCatalog(legacyCatalogPath);
 		check("legacy endedAt migrates to stoppedAt", migrated.threads[thread.conversationId]?.stoppedAt === "2026-01-02T00:00:00.000Z");
+		check("legacy ownerSessionId is preserved when present", migrated.threads[thread.conversationId]?.ownerSessionId === "sess1");
+		const deadSpawn = ((command: string, args: readonly string[]) => ({ status: args[0] === "has-session" ? 1 : 0 })) as any;
+		const liveSpawn = ((command: string, args: readonly string[]) => ({ status: args[0] === "has-session" ? 0 : 0 })) as any;
+		const reconciledDead = workerAwareEntry({ ...entry, stoppedAt: null }, deadSpawn, new Date("2026-01-03T00:00:00.000Z"));
+		check("worker-aware catalog marks missing worker stopped", reconciledDead.stoppedAt === "2026-01-03T00:00:00.000Z", String(reconciledDead.stoppedAt));
+		const reconciledLive = workerAwareEntry({ ...entry, stoppedAt: "2026-01-03T00:00:00.000Z" }, liveSpawn, new Date("2026-01-04T00:00:00.000Z"));
+		check("worker-aware catalog clears stale stoppedAt for live worker", reconciledLive.stoppedAt === null);
+		const reconciledCatalog = reconcileCatalogWorkerState({ version: 1, threads: { [thread.conversationId]: { ...entry, stoppedAt: null } } }, deadSpawn, new Date("2026-01-05T00:00:00.000Z"));
+		check("catalog reconciliation updates entries", reconciledCatalog.threads[thread.conversationId]?.stoppedAt === "2026-01-05T00:00:00.000Z");
 
 		// Mount inheritance
 		const mountsPath = join(work, "chat-mount", "mounts.json");
@@ -244,6 +253,29 @@ async function main() {
 			}) as typeof fetch,
 		});
 		check("discord close endpoint targets thread channel", closeRequested.endsWith("/channels/thread-id"));
+		await sendDiscordChannelEmbed({
+			account: parent.account,
+			channelId: "thread-id",
+			title: "Thread lifecycle",
+			description: "Starting pi-chat thread **Feature Idea**.",
+			fetchImpl: (async (_url: any, init: any) => {
+				const body = JSON.parse(init.body);
+				check("discord embed sends no plain content", body.content === undefined);
+				check("discord embed sends title", body.embeds?.[0]?.title === "Thread lifecycle");
+				check("discord embed sends description", body.embeds?.[0]?.description.includes("Feature Idea"));
+				return { ok: true, status: 200, json: async () => ({}) } as Response;
+			}) as typeof fetch,
+		});
+		await sendDiscordThreadIntro({
+			account: parent.account,
+			threadId: "thread-id",
+			content: "Starting pi-chat thread **Feature Idea**.",
+			fetchImpl: (async (_url: any, init: any) => {
+				const body = JSON.parse(init.body);
+				check("discord intro uses embed", body.embeds?.[0]?.title === "Thread lifecycle");
+				return { ok: true, status: 200, json: async () => ({}) } as Response;
+			}) as typeof fetch,
+		});
 
 		const fakeSession = join(work, "host.jsonl");
 		const header = { type: "session", version: 3, id: "host", timestamp: "2026-01-01T00:00:00.000Z", cwd: parent.workspaceDir };
@@ -268,6 +300,7 @@ async function main() {
 		check("worker command replaces old session", !cmd.includes("old.jsonl"), cmd);
 
 		// startWorker behavior (mocked tmux)
+		const statusDir = join(work, "worker-status");
 		let tmuxCalls: any[] = [];
 		let alive = false;
 		const fakeSpawn = ((command: string, args: readonly string[], options?: any) => {
@@ -277,16 +310,26 @@ async function main() {
 			if (args[0] === "kill-session") { alive = false; return { status: 0 } as any; }
 			return { status: 0 } as any;
 		}) as any;
-		const first = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn, env: { GONDOLIN_IMAGE: "custom" } });
+		const first = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn, env: { GONDOLIN_IMAGE: "custom" }, statusDir });
 		check("first startWorker starts tmux", first.action === "started" && tmuxCalls.some((c) => c[1][0] === "new-session"));
 		check("startWorker passes env to tmux client", tmuxCalls.some((c) => c[2]?.env?.GONDOLIN_IMAGE === "custom"));
 		check("startWorker seeds tmux session environment", tmuxCalls.some((c) => c[1].includes("GONDOLIN_IMAGE=custom")));
 		tmuxCalls = [];
-		const second = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn });
+		const second = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn, statusDir });
 		check("second startWorker reports already-running", second.action === "already-running" && !tmuxCalls.some((c) => c[1][0] === "new-session"));
 		tmuxCalls = [];
-		const third = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn, restart: true });
+		const third = startWorker({ conversationId: "acct/thread", sessionFile: "/tmp/sdir/sess.jsonl", cwd: "/repo", spawn: fakeSpawn, restart: true, statusDir });
 		check("startWorker --restart kills and respawns", third.action === "restarted" && tmuxCalls.some((c) => c[1][0] === "kill-session") && tmuxCalls.some((c) => c[1][0] === "new-session"));
+		const restartingStatus = JSON.parse(await readFile(workerStatusPath("acct/thread", statusDir), "utf8"));
+		check("startWorker --restart stamps status restarting", restartingStatus.state === "restarting" && restartingStatus.conversationId === "acct/thread");
+		stampWorkerStatus("acct/thread", "dead", { statusDir, now: new Date("2026-01-06T00:00:00.000Z") });
+		const stampedDead = JSON.parse(await readFile(workerStatusPath("acct/thread", statusDir), "utf8"));
+		check("dead status stamp preserves conversation and clears pid", stampedDead.state === "dead" && stampedDead.pid === 0 && stampedDead.updatedAt === "2026-01-06T00:00:00.000Z");
+		alive = true;
+		const killed = killWorker("acct/thread", fakeSpawn, { statusDir, now: new Date("2026-01-07T00:00:00.000Z") });
+		const killedStatus = JSON.parse(await readFile(workerStatusPath("acct/thread", statusDir), "utf8"));
+		check("killWorker kills live tmux", killed === true);
+		check("killWorker stamps dead", killedStatus.state === "dead" && killedStatus.updatedAt === "2026-01-07T00:00:00.000Z");
 	} finally {
 		await rm(work, { recursive: true, force: true });
 	}

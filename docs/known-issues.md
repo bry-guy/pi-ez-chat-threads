@@ -46,9 +46,15 @@ thread's VM should be a stable, named environment, not a moving target.
 
 ### Catalog and worker-status drift after a worker dies or a parent is reconnected
 
-Two independent things can go stale and silently lie about a thread's
-state. Both surfaced in a real session and both can make a working thread
-look stuck.
+Status: fixed after 0.6.0. `killWorker` now stamps worker-status as
+`dead`, `startWorker --restart` stamps it as `restarting`, and list /
+supervisor paths cross-check tmux liveness before trusting catalog
+state. New catalog writes no longer set `ownerSessionId`; old catalogs
+are still readable.
+
+Two independent things used to go stale and silently lie about a
+thread's state. Both surfaced in a real session and both could make a
+working thread look stuck.
 
 **1. `worker-status/<tmux-session>.json` is never invalidated when a
 worker dies.** The worker writes this file from inside the live pi
@@ -101,12 +107,16 @@ the supervisor sees a different live parent session bound to the same
 
 ### Lifecycle notice posted before the restart actually happens
 
-`startOrAttach` (in `index.ts` near line 286) posts
-`"Restarting pi-chat thread <name>."` to the thread Discord channel
-*before* `restartExistingThread` runs `startWorker`. The post fires
-unconditionally on every `/chat-thread restart <name>` and on every
-`/chat-thread <name>` against an existing thread, regardless of whether
-the worker actually needed restarting.
+Status: fixed after 0.6.0. Existing-thread starts no longer post a
+lifecycle notice before `startWorker` returns. `/chat-thread <name>` no
+longer restarts an already-running worker; it reports `already-running`
+and does not post a lifecycle notice.
+
+`startOrAttach` used to post `"Restarting pi-chat thread <name>."` to
+the thread Discord channel *before* `restartExistingThread` ran
+`startWorker`. The post fired unconditionally on every `/chat-thread
+restart <name>` and on every `/chat-thread <name>` against an existing
+thread, regardless of whether the worker actually needed restarting.
 
 This makes false positives indistinguishable from real restarts. Users
 see the notice on every invocation and assume the worker is being
@@ -122,14 +132,18 @@ bounced when it is not. Two small fixes:
 
 ### LLM echoes lifecycle notices back as plain text
 
+Status: fixed after 0.6.0. Lifecycle notices now use Discord embeds with
+a `Thread lifecycle` title, so a model echo is visibly different from a
+real lifecycle notice.
+
 The extension's lifecycle notices (`"Restarting pi-chat thread
-<name>."`, `"Starting pi-chat thread <name>."`) are plain text messages
-posted via `sendDiscordChannelMessage`. They land in the thread's
-Discord history, which the worker's LLM then sees as part of the
-conversation transcript. When the LLM is asked a question in that
-thread on a later turn, it sometimes echoes the same
+<name>."`, `"Starting pi-chat thread <name>."`) used to be plain text
+messages posted via `sendDiscordChannelMessage`. They landed in the
+thread's Discord history, which the worker's LLM then saw as part of the
+conversation transcript. When the LLM was asked a question in that
+thread on a later turn, it sometimes echoed the same
 `"Restarting pi-chat thread <name>."` line as its reply, because the
-pattern is well-represented in recent context.
+pattern was well-represented in recent context.
 
 Observed 2026-06-05: every prompt in the
 `infra-migrate-and-upgrade-sffpc` thread for ~15 minutes produced a

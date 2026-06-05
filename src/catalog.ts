@@ -2,6 +2,8 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { isWorkerAlive, type WorkerSpawn } from "./worker.js";
+
 export const THREADS_CATALOG_PATH = join(homedir(), ".pi", "agent", "chat-threads", "threads.json");
 
 export interface ThreadCatalogEntry {
@@ -12,7 +14,7 @@ export interface ThreadCatalogEntry {
 	normalizedName: string;
 	createdAt: string;
 	stoppedAt: string | null;
-	ownerSessionId: string;
+	ownerSessionId?: string;
 	lastSessionFile?: string;
 }
 
@@ -48,7 +50,7 @@ export async function readCatalog(path = THREADS_CATALOG_PATH): Promise<ThreadCa
 				normalizedName: String(raw.normalizedName ?? ""),
 				createdAt: String(raw.createdAt ?? ""),
 				stoppedAt,
-				ownerSessionId: String(raw.ownerSessionId ?? ""),
+				ownerSessionId: raw.ownerSessionId != null ? String(raw.ownerSessionId) : undefined,
 				lastSessionFile: raw.lastSessionFile != null ? String(raw.lastSessionFile) : undefined,
 			};
 		}
@@ -81,6 +83,19 @@ export function listForParent(catalog: ThreadCatalog, parentConversationId: stri
 	return Object.values(catalog.threads)
 		.filter((e) => e.parentConversationId === parentConversationId)
 		.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export function workerAwareEntry(entry: ThreadCatalogEntry, spawn?: WorkerSpawn, now = new Date()): ThreadCatalogEntry {
+	const workerAlive = isWorkerAlive(entry.threadConversationId, spawn);
+	if (workerAlive && entry.stoppedAt) return { ...entry, stoppedAt: null };
+	if (!workerAlive && !entry.stoppedAt) return { ...entry, stoppedAt: now.toISOString() };
+	return { ...entry };
+}
+
+export function reconcileCatalogWorkerState(catalog: ThreadCatalog, spawn?: WorkerSpawn, now = new Date()): ThreadCatalog {
+	const threads: Record<string, ThreadCatalogEntry> = {};
+	for (const [key, entry] of Object.entries(catalog.threads)) threads[key] = workerAwareEntry(entry, spawn, now);
+	return { version: 1, threads };
 }
 
 export function upsertEntry(catalog: ThreadCatalog, entry: ThreadCatalogEntry): ThreadCatalog {
