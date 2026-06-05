@@ -2,6 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0](https://github.com/bry-guy/pi-ez-chat-threads/compare/v0.6.0...v1.0.0) (2026-06-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* replace end + --reactivate with start/stop/restart.
+    - Same syntax in pi session and from Discord (@bot /chat-thread ...).
+    - Bare /chat-thread <name> is shorthand for start <name>.
+    - start <name> attaches to existing thread; restarts the worker if it
+      was stopped or if the tmux session is dead.
+    - restart force-restarts the worker (kills tmux, respawns from the
+      recorded session file).
+    - stop kills the worker and marks the catalog entry stoppedAt.
+      The Discord thread, pi-chat conversation entry, and session file
+      are all preserved.
+    - list unchanged.
+* /chat-thread now requires an explicit <name>.
+    - Auto-naming from session removed.
+    - --new, --restart, --no-spawn flags removed; restart is implicit.
+    - Remote /chat-thread is always non-interactive.
+
+### Features
+
+* add chat thread resume command ([75ad09d](https://github.com/bry-guy/pi-ez-chat-threads/commit/75ad09d0105445d950ff9f6b111d1877486d38fa))
+* add interactive session source picker ([a2daa8a](https://github.com/bry-guy/pi-ez-chat-threads/commit/a2daa8a3dc721da2c5c11edaebd56e0bbf2a0329))
+* adopt chat mount integration and mention commands ([e0d595e](https://github.com/bry-guy/pi-ez-chat-threads/commit/e0d595ef278884e8cc0cf3e35fff14ec7b503e2e))
+* allow thread creation from any pi session ([ce81e9a](https://github.com/bry-guy/pi-ez-chat-threads/commit/ce81e9ae258559d2c0b28f6a41e8c1b18a637f23))
+* inherit chat mounts for threads ([86244df](https://github.com/bry-guy/pi-ez-chat-threads/commit/86244dfbd87c65c55798e7b3b47ce99fb232e86f))
+* initial persistent chat threads package ([02204e9](https://github.com/bry-guy/pi-ez-chat-threads/commit/02204e97a33a6f51e1ebc711558f7633b4dcedb5))
+* kill and rename managed threads ([15cea8c](https://github.com/bry-guy/pi-ez-chat-threads/commit/15cea8c904a6f29c032d89ba66fcd600393674d1))
+* start/stop/restart/list lifecycle ([35e7f15](https://github.com/bry-guy/pi-ez-chat-threads/commit/35e7f15a52600a314836138dd3150db9159e351d))
+* supervise dormant chat threads ([38120eb](https://github.com/bry-guy/pi-ez-chat-threads/commit/38120ebf97378dfba79be0a530a752af8f6833c2))
+* thread lifecycle with named create/attach/end/list ([c0cc628](https://github.com/bry-guy/pi-ez-chat-threads/commit/c0cc628d714d65f5f71977a88e6a1c2153495b7b))
+
+
+### Bug Fixes
+
+* do not record thread workspace as forked session cwd ([fa1bdd8](https://github.com/bry-guy/pi-ez-chat-threads/commit/fa1bdd8ce990c8197fe0a19270bcaaca0955e3d7))
+* do not stamp parent session with thread state ([1f8dae0](https://github.com/bry-guy/pi-ez-chat-threads/commit/1f8dae07b97a8392339a41b2c82d8e0c368fab11))
+* fence remote slash command responses ([709d422](https://github.com/bry-guy/pi-ez-chat-threads/commit/709d42289b9660ae7cf20e7f18214aa6b3c683ef))
+* fork parent worker for remote thread commands ([45a78c0](https://github.com/bry-guy/pi-ez-chat-threads/commit/45a78c0f7f732ba6ad8007146dd9412ee34956a6))
+* handle remote chat-thread noninteractively ([dac6d5b](https://github.com/bry-guy/pi-ez-chat-threads/commit/dac6d5bf50083f531ffe957cf5f61891b98c6d19))
+* harden thread worker lifecycle state ([a509032](https://github.com/bry-guy/pi-ez-chat-threads/commit/a509032a192f4dd68f047f14317e3850d1f8611b))
+* inherit chat-git config for managed threads ([ed6721e](https://github.com/bry-guy/pi-ez-chat-threads/commit/ed6721e305e382b555182a7b90da7ac92a762ce3))
+* inherit parent runtime for chat threads ([bc4414b](https://github.com/bry-guy/pi-ez-chat-threads/commit/bc4414bbfec34f5c0ab271a247712f752f939518))
+* support mention-prefixed chat thread commands ([72efccf](https://github.com/bry-guy/pi-ez-chat-threads/commit/72efccf56a6d589fd3a49687f9c3dd6eaae92ea5))
+* use latest-line-only remote command matcher ([4e89f7e](https://github.com/bry-guy/pi-ez-chat-threads/commit/4e89f7ed6c76c49f5ae1c5ea8064cffa949eacb9))
+* use line-by-line transcript command matcher ([2b9d5bd](https://github.com/bry-guy/pi-ez-chat-threads/commit/2b9d5bdd680c027e4677420e8a8d9133d0588d75))
+
 ## [0.6.0] - 2026-05-29
 
 ### Added
