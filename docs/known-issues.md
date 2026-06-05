@@ -99,6 +99,61 @@ migration. Either remove it from the catalog, or rewrite it whenever
 the supervisor sees a different live parent session bound to the same
 `parentConversationId`.
 
+### Lifecycle notice posted before the restart actually happens
+
+`startOrAttach` (in `index.ts` near line 286) posts
+`"Restarting pi-chat thread <name>."` to the thread Discord channel
+*before* `restartExistingThread` runs `startWorker`. The post fires
+unconditionally on every `/chat-thread restart <name>` and on every
+`/chat-thread <name>` against an existing thread, regardless of whether
+the worker actually needed restarting.
+
+This makes false positives indistinguishable from real restarts. Users
+see the notice on every invocation and assume the worker is being
+bounced when it is not. Two small fixes:
+
+- Post the notice only after `startWorker` returns with
+  `action: "restarted"`. For `"already-running"`, post a different
+  (or no) notice. For `"started"` (cold start), keep the existing
+  message.
+- Tolerate the small UX regression that the user sees no message
+  during the (sub-second) restart window. The fenced result block in
+  the parent channel is already the authoritative confirmation.
+
+### LLM echoes lifecycle notices back as plain text
+
+The extension's lifecycle notices (`"Restarting pi-chat thread
+<name>."`, `"Starting pi-chat thread <name>."`) are plain text messages
+posted via `sendDiscordChannelMessage`. They land in the thread's
+Discord history, which the worker's LLM then sees as part of the
+conversation transcript. When the LLM is asked a question in that
+thread on a later turn, it sometimes echoes the same
+`"Restarting pi-chat thread <name>."` line as its reply, because the
+pattern is well-represented in recent context.
+
+Observed 2026-06-05: every prompt in the
+`infra-migrate-and-upgrade-sffpc` thread for ~15 minutes produced a
+verbatim `"Restarting pi-chat thread infra-migrate-and-upgrade-sffpc."`
+reply from the worker. The worker tmux session was healthy and
+`recordCount` advanced normally; the extension was not actually
+restarting anything. The user reasonably read this as a restart loop.
+
+Fix shape, in increasing invasiveness:
+
+- Wrap lifecycle notices in a Discord embed (with a title like
+  `"Thread lifecycle"`). Embeds are structurally hard for the LLM to
+  reproduce as a chat message, so an echoed plain-text version is
+  distinguishable from a real one at a glance.
+- Prefix lifecycle notices with a sentinel that is unlikely to appear
+  in normal model output (a zero-width joiner sequence, a unique unicode
+  glyph, or a `[pi-ez-chat-threads]` tag). Then the agent in the thread
+  can be instructed not to repeat lines starting with that prefix.
+- Add an opt-in bridge-side dedupe: collapse consecutive outbound
+  posts in the same channel with identical text to one post.
+
+The embed change is the cleanest and the only one that does not assume
+the LLM cooperates.
+
 ### Recovering a stuck thread worker from before 0.4.2
 
 If a thread was created with `pi-ez-chat-threads` < 0.4.2, its forked
